@@ -193,7 +193,7 @@ if exist "!ENV_DIR!\machine_id" (
 )
 set "CAC_USERNAME=user-!ENV_NAME:~0,8!"
 if exist "!CAC_DIR!\fingerprint-hook.js" (
-    set "NODE_OPTIONS=--require !CAC_DIR!\fingerprint-hook.js !NODE_OPTIONS!"
+    echo !NODE_OPTIONS! | findstr /C:"fingerprint-hook.js" >nul 2>&1 || set "NODE_OPTIONS=--require !CAC_DIR!\fingerprint-hook.js !NODE_OPTIONS!"
 )
 
 REM timezone

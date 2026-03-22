@@ -85,6 +85,21 @@ rm -f ~/bin/cac                  # 删除命令（bash 安装）
 ```
 </details>
 
+**Windows 安装：**
+
+```powershell
+# 1. 确保已安装 Claude Code (npm install -g @anthropic-ai/claude-code)
+# 2. 下载 cac.ps1、cac.cmd、fingerprint-hook.js 到 ~/bin/
+git clone https://github.com/nmhjklnm/cac.git
+copy cac\cac.ps1 %USERPROFILE%\bin\
+copy cac\cac.cmd %USERPROFILE%\bin\
+copy cac\fingerprint-hook.js %USERPROFILE%\bin\
+
+# 3. 将 ~/bin 和 ~/.cac/bin 加入 PATH（系统设置 > 环境变量）
+# 4. 初始化
+cac setup
+```
+
 ### 使用
 
 ```bash
