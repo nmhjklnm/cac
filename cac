@@ -712,6 +712,13 @@ fi
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
 [[ -f "$_env_dir/hostname" ]] && export HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
 
+# Node.js 级指纹拦截（绕过 shell shim 限制）
+[[ -f "$_env_dir/hostname" ]]    && export FKCLAUDE_HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
+[[ -f "$_env_dir/mac_address" ]] && export FKCLAUDE_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
+[[ -f "$_env_dir/machine_id" ]]  && export FKCLAUDE_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
+export FKCLAUDE_USERNAME="user-$(echo "$_name" | cut -c1-8)"
+[[ -f "$CAC_DIR/fingerprint-hook.js" ]] && export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}"
+
 # 执行真实 claude
 _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 [[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }
@@ -843,6 +850,19 @@ cmd_setup() {
 
     local os; os=$(_detect_os)
     _write_wrapper
+
+    # 复制 Node.js 指纹钩子
+    local _hook_src
+    _hook_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fingerprint-hook.js"
+    if [[ -f "$_hook_src" ]]; then
+        cp "$_hook_src" "$CAC_DIR/fingerprint-hook.js"
+        echo "  ✓ fingerprint hook → $CAC_DIR/fingerprint-hook.js"
+    elif [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
+        echo "  ✓ fingerprint hook（已存在）"
+    else
+        echo "  ⚠ fingerprint-hook.js 未找到，Node.js 级指纹拦截不可用" >&2
+    fi
+
     _write_hostname_shim
     _write_ifconfig_shim
 
