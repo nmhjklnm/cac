@@ -99,6 +99,13 @@ fi
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
 [[ -f "$_env_dir/hostname" ]] && export HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
 
+# Node.js 级指纹拦截（绕过 shell shim 限制）
+[[ -f "$_env_dir/hostname" ]]    && export FKCLAUDE_HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
+[[ -f "$_env_dir/mac_address" ]] && export FKCLAUDE_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
+[[ -f "$_env_dir/machine_id" ]]  && export FKCLAUDE_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
+export FKCLAUDE_USERNAME="user-$(echo "$_name" | cut -c1-8)"
+[[ -f "$CAC_DIR/fingerprint-hook.js" ]] && export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}"
+
 # 执行真实 claude
 _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 [[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }

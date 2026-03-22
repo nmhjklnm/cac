@@ -45,4 +45,7 @@ SOURCES=(
 } > "$OUT"
 
 chmod +x "$OUT"
+
+cp src/fingerprint-hook.js fingerprint-hook.js 2>/dev/null || true
+
 echo "✓ 构建完成 → ${OUT} ($(wc -l < "${OUT}") 行)"

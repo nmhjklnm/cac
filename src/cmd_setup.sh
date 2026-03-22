@@ -17,6 +17,19 @@ cmd_setup() {
 
     local os; os=$(_detect_os)
     _write_wrapper
+
+    # 复制 Node.js 指纹钩子
+    local _hook_src
+    _hook_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fingerprint-hook.js"
+    if [[ -f "$_hook_src" ]]; then
+        cp "$_hook_src" "$CAC_DIR/fingerprint-hook.js"
+        echo "  ✓ fingerprint hook → $CAC_DIR/fingerprint-hook.js"
+    elif [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
+        echo "  ✓ fingerprint hook（已存在）"
+    else
+        echo "  ⚠ fingerprint-hook.js 未找到，Node.js 级指纹拦截不可用" >&2
+    fi
+
     _write_hostname_shim
     _write_ifconfig_shim
 
