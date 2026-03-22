@@ -31,7 +31,14 @@ _new_sid()     { uuidgen | tr '[:upper:]' '[:lower:]'; }
 _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())"; }
 _new_machine_id() { uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() { echo "host-$(uuidgen | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
-_new_mac() { od -An -tx1 -N5 /dev/urandom | awk '{printf "02:%s:%s:%s:%s:%s",$1,$2,$3,$4,$5}'; }
+_new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
+
+# 获取真实命令路径（绕过 shim）
+_get_real_cmd() {
+    local cmd="$1"
+    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/shim-bin" | tr '\n' ':') \
+        command -v "$cmd" 2>/dev/null || true
+}
 
 # host:port:user:pass → http://user:pass@host:port
 # 或直接传入完整 URL（http://、https://、socks5://）
