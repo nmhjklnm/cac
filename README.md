@@ -7,7 +7,7 @@
 **[中文](#中文) | [English](#english)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 [![Shell](https://img.shields.io/badge/Shell-Bash-green.svg)]()
 
 </div>
@@ -32,15 +32,16 @@ Claude Code 在运行过程中会读取并上报设备标识符（硬件 UUID、
 
 | | 特性 | 说明 |
 |:---|:---|:---|
-| **A** | 硬件 UUID 隔离 | macOS: 拦截 `ioreg` / Linux: 拦截 `machine-id` |
-| **A** | hostname / MAC 隔离 | 拦截 `hostname` 和 `ifconfig` 命令 |
+| **A** | 硬件 UUID 隔离 | macOS: 拦截 `ioreg` / Linux: 拦截 `machine-id` / Windows: 拦截 `wmic`+`reg` |
+| **A** | hostname / MAC 隔离 | Shell shim + Node.js `os.hostname()` / `os.networkInterfaces()` 双层拦截 |
+| **A** | Node.js 级指纹钩子 | `fingerprint-hook.js` 通过 `NODE_OPTIONS --require` 拦截直接系统调用 |
 | **A** | stable_id / userID 隔离 | 切换配置时自动写入独立标识 |
 | **A** | 时区 / 语言伪装 | 根据代理出口地区自动匹配 |
 | **A** | NS 层级遥测拦截 | DNS guard 拦截 `statsig.anthropic.com` 等遥测域名 |
 | **A** | 12 层环境变量保护 | 全面禁用遥测、错误上报、非必要流量 |
 | **A** | fetch 遥测拦截 | 替换原生 fetch，防止绕过 DNS 拦截 |
 | **A** | mTLS 客户端证书 | 自签 CA + 每环境独立客户端证书 |
-| **B** | 进程级代理 | 支持 HTTP/HTTPS/SOCKS5 代理 |
+| **B** | 进程级代理 | 支持 HTTP/HTTPS/SOCKS5 代理，自动检测协议 |
 | **B** | 免本地服务端 | 无需 Clash / Shadowrocket / TUN，CLI 直连 |
 | **B** | 静态住宅 IP 支持 | 配置固定代理 → 固定出口 IP |
 | **B** | 启动前连通检测 | 代理不可达时拒绝启动，真实 IP 零泄漏 |
