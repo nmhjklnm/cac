@@ -7,6 +7,8 @@
   },
   "files": [
     "cac",
+    "cac.ps1",
+    "cac.cmd",
     "fingerprint-hook.js",
     "scripts/postinstall.js",
     "README.md",
@@ -36,7 +38,7 @@
   "bugs": {
     "url": "https://github.com/nmhjklnm/cac/issues"
   },
-  "os": ["darwin", "linux"],
+  "os": ["darwin", "linux", "win32"],
   "engines": {
     "node": ">=14.0.0"
   }
