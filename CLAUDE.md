@@ -11,7 +11,7 @@ The `cac` binary in the repo root is the built artifact — a single concatenate
 bash build.sh
 ```
 
-`build.sh` concatenates `src/*.sh` files in a fixed order (utils → templates → cmd_setup → cmd_env → cmd_check → cmd_stop → cmd_help → main) into the single `cac` file, stripping shebangs and prepending the global header.
+`build.sh` concatenates `src/*.sh` files in a fixed order (utils → dns_block → mtls → templates → cmd_setup → cmd_env → cmd_check → cmd_stop → cmd_help → main) into the single `cac` file, stripping shebangs and prepending the global header. It also copies `fingerprint-hook.js` to the repo root.
 
 ## Architecture
 

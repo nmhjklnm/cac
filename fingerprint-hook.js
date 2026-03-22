@@ -1,5 +1,6 @@
 // This file is injected via NODE_OPTIONS="--require /path/to/fingerprint-hook.js"
 // It monkey-patches Node.js system APIs to return spoofed device identifiers.
+// Reads from CAC_HOSTNAME, CAC_MAC, CAC_MACHINE_ID, CAC_USERNAME env vars.
 // Works on macOS, Linux, and Windows.
 
 const os = require('os');
@@ -7,13 +8,13 @@ const fs = require('fs');
 const child_process = require('child_process');
 
 // --- os.hostname() ---
-const fakeHostname = process.env.FKCLAUDE_HOSTNAME;
+const fakeHostname = process.env.CAC_HOSTNAME;
 if (fakeHostname) {
   os.hostname = () => fakeHostname;
 }
 
 // --- os.networkInterfaces() ---
-const fakeMac = process.env.FKCLAUDE_MAC;
+const fakeMac = process.env.CAC_MAC;
 if (fakeMac) {
   const _origNetworkInterfaces = os.networkInterfaces.bind(os);
   os.networkInterfaces = () => {
@@ -30,7 +31,7 @@ if (fakeMac) {
 }
 
 // --- os.userInfo() ---
-const fakeUsername = process.env.FKCLAUDE_USERNAME;
+const fakeUsername = process.env.CAC_USERNAME;
 if (fakeUsername) {
   const _origUserInfo = os.userInfo.bind(os);
   os.userInfo = (opts) => {
@@ -40,84 +41,101 @@ if (fakeUsername) {
   };
 }
 
-// --- fs.readFileSync intercept for /etc/machine-id ---
-const fakeMachineId = process.env.FKCLAUDE_MACHINE_ID;
+// --- machine-id interception helpers ---
+const MACHINE_ID_PATHS = ['/etc/machine-id', '/var/lib/dbus/machine-id'];
+function isMachineIdPath(p) {
+  const s = typeof p === 'string' ? p : (p && p.toString ? p.toString() : '');
+  return MACHINE_ID_PATHS.includes(s);
+}
+function fakeResult(options, data) {
+  return (typeof options === 'string' || (options && options.encoding))
+    ? data : Buffer.from(data);
+}
+
+// --- fs.readFileSync / fs.readFile / fs.promises.readFile ---
+const fakeMachineId = process.env.CAC_MACHINE_ID;
 if (fakeMachineId) {
+  const fakeData = fakeMachineId + '\n';
+
   const _origReadFileSync = fs.readFileSync.bind(fs);
   fs.readFileSync = (path, options) => {
-    const p = typeof path === 'string' ? path : path.toString();
-    if (p === '/etc/machine-id' || p === '/var/lib/dbus/machine-id') {
-      return typeof options === 'string' || (options && options.encoding)
-        ? fakeMachineId + '\n'
-        : Buffer.from(fakeMachineId + '\n');
-    }
+    if (isMachineIdPath(path)) return fakeResult(options, fakeData);
     return _origReadFileSync(path, options);
   };
-  // Also patch fs.readFile (async version)
+
   const _origReadFile = fs.readFile.bind(fs);
   fs.readFile = (path, ...args) => {
-    const p = typeof path === 'string' ? path : path.toString();
-    if (p === '/etc/machine-id' || p === '/var/lib/dbus/machine-id') {
-      const cb = args[args.length - 1];
-      if (typeof cb === 'function') {
-        const options = args.length > 1 ? args[0] : null;
-        const result = typeof options === 'string' || (options && options.encoding)
-          ? fakeMachineId + '\n'
-          : Buffer.from(fakeMachineId + '\n');
-        process.nextTick(cb, null, result);
+    if (isMachineIdPath(path)) {
+      const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      if (cb) {
+        const opts = args.length > 1 ? args[0] : null;
+        process.nextTick(cb, null, fakeResult(opts, fakeData));
         return;
       }
     }
     return _origReadFile(path, ...args);
   };
+
+  // Patch fs.promises.readFile (used by modern Node.js code)
+  try {
+    const fsp = require('fs').promises || require('fs/promises');
+    if (fsp && fsp.readFile) {
+      const _origPromiseReadFile = fsp.readFile.bind(fsp);
+      fsp.readFile = (path, options) => {
+        if (isMachineIdPath(path)) {
+          return Promise.resolve(fakeResult(options, fakeData));
+        }
+        return _origPromiseReadFile(path, options);
+      };
+    }
+  } catch (_) { /* fs/promises not available on older Node */ }
 }
 
 // --- Windows: intercept child_process for wmic / reg queries ---
 if (process.platform === 'win32' && fakeMachineId) {
-  // Intercept execSync to catch wmic and reg query calls for MachineGuid
   const _origExecSync = child_process.execSync.bind(child_process);
   child_process.execSync = (cmd, options) => {
     const cmdStr = typeof cmd === 'string' ? cmd : cmd.toString();
-    // wmic csproduct get UUID
     if (/wmic\s+csproduct\s+get\s+uuid/i.test(cmdStr)) {
-      const result = `UUID\n${fakeMachineId}\n`;
-      return (options && options.encoding) ? result : Buffer.from(result);
+      return fakeResult(options, `UUID\n${fakeMachineId}\n`);
     }
-    // reg query for MachineGuid
     if (/reg\s+query.*MachineGuid/i.test(cmdStr)) {
-      const result = `    MachineGuid    REG_SZ    ${fakeMachineId}\n`;
-      return (options && options.encoding) ? result : Buffer.from(result);
+      return fakeResult(options, `    MachineGuid    REG_SZ    ${fakeMachineId}\n`);
     }
     return _origExecSync(cmd, options);
   };
 
-  // Intercept exec (async) for the same patterns
   const _origExec = child_process.exec.bind(child_process);
   child_process.exec = (cmd, ...args) => {
     const cmdStr = typeof cmd === 'string' ? cmd : cmd.toString();
     const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
-
     if (/wmic\s+csproduct\s+get\s+uuid/i.test(cmdStr)) {
-      if (cb) { process.nextTick(cb, null, `UUID\n${fakeMachineId}\n`, ''); }
-      return;
+      if (cb) process.nextTick(cb, null, `UUID\n${fakeMachineId}\n`, '');
+      // Return a mock ChildProcess-like object so callers don't crash
+      return _origExec('echo', () => {});
     }
     if (/reg\s+query.*MachineGuid/i.test(cmdStr)) {
-      if (cb) { process.nextTick(cb, null, `    MachineGuid    REG_SZ    ${fakeMachineId}\n`, ''); }
-      return;
+      if (cb) process.nextTick(cb, null, `    MachineGuid    REG_SZ    ${fakeMachineId}\n`, '');
+      return _origExec('echo', () => {});
     }
     return _origExec(cmd, ...args);
   };
 
-  // Intercept execFileSync for powershell/cmd invocations querying machine GUID
   const _origExecFileSync = child_process.execFileSync.bind(child_process);
-  child_process.execFileSync = (file, args, options) => {
+  child_process.execFileSync = (file, argsOrOpts, options) => {
+    // Handle optional args parameter: execFileSync(file[, args][, options])
+    let args = argsOrOpts;
+    let opts = options;
+    if (!Array.isArray(argsOrOpts) && typeof argsOrOpts === 'object') {
+      args = [];
+      opts = argsOrOpts;
+    }
     const fileStr = (typeof file === 'string' ? file : '').toLowerCase();
     const argsStr = Array.isArray(args) ? args.join(' ') : '';
     if ((fileStr.includes('wmic') && /csproduct.*uuid/i.test(argsStr)) ||
         (fileStr.includes('reg') && /MachineGuid/i.test(argsStr))) {
-      const result = fakeMachineId + '\n';
-      return (options && options.encoding) ? result : Buffer.from(result);
+      return fakeResult(opts, fakeMachineId + '\n');
     }
-    return _origExecFileSync(file, args, options);
+    return _origExecFileSync(file, argsOrOpts, options);
   };
 }

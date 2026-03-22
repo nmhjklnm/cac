@@ -17,7 +17,18 @@ cmd_add() {
     fi
 
     local proxy
-    proxy=$(_parse_proxy "$raw_proxy")
+    # 如果用户未指定协议，自动探测 http/socks5/https
+    if [[ ! "$raw_proxy" =~ ^(http|https|socks5):// ]]; then
+        printf "  自动检测代理协议 ... "
+        proxy=$(_auto_detect_proxy "$raw_proxy")
+        if [[ $? -eq 0 ]]; then
+            echo "$(_green "$(echo "$proxy" | grep -oE '^[a-z]+')://")"
+        else
+            echo "$(_yellow "检测失败，使用默认 http://")"
+        fi
+    else
+        proxy=$(_parse_proxy "$raw_proxy")
+    fi
 
     echo "即将创建环境：$(_bold "$name")"
     echo "  代理：$proxy"

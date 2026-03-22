@@ -100,11 +100,16 @@ fi
 [[ -f "$_env_dir/hostname" ]] && export HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
 
 # Node.js 级指纹拦截（绕过 shell shim 限制）
-[[ -f "$_env_dir/hostname" ]]    && export FKCLAUDE_HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
-[[ -f "$_env_dir/mac_address" ]] && export FKCLAUDE_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
-[[ -f "$_env_dir/machine_id" ]]  && export FKCLAUDE_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
-export FKCLAUDE_USERNAME="user-$(echo "$_name" | cut -c1-8)"
-[[ -f "$CAC_DIR/fingerprint-hook.js" ]] && export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}"
+[[ -f "$_env_dir/hostname" ]]    && export CAC_HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
+[[ -f "$_env_dir/mac_address" ]] && export CAC_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
+[[ -f "$_env_dir/machine_id" ]]  && export CAC_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
+export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
+if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
+    case "${NODE_OPTIONS:-}" in
+        *fingerprint-hook.js*) ;; # 已注入，跳过
+        *) export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}" ;;
+    esac
+fi
 
 # 执行真实 claude
 _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
@@ -185,7 +190,7 @@ CAC_DIR="$HOME/.cac"
 # 读取伪造的 hostname
 _hn_file="$CAC_DIR/envs/$(tr -d '[:space:]' < "$CAC_DIR/current" 2>/dev/null)/hostname"
 if [[ -f "$_hn_file" ]]; then
-    cat "$_hn_file"
+    tr -d '[:space:]' < "$_hn_file"
     exit 0
 fi
 

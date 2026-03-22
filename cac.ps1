@@ -183,17 +183,17 @@ set "ANTHROPIC_API_KEY="
 
 REM fingerprint hook via NODE_OPTIONS
 if exist "!ENV_DIR!\hostname" (
-    set /p FKCLAUDE_HOSTNAME=<"!ENV_DIR!\hostname"
+    set /p CAC_HOSTNAME=<"!ENV_DIR!\hostname"
 )
 if exist "!ENV_DIR!\mac_address" (
-    set /p FKCLAUDE_MAC=<"!ENV_DIR!\mac_address"
+    set /p CAC_MAC=<"!ENV_DIR!\mac_address"
 )
 if exist "!ENV_DIR!\machine_id" (
-    set /p FKCLAUDE_MACHINE_ID=<"!ENV_DIR!\machine_id"
+    set /p CAC_MACHINE_ID=<"!ENV_DIR!\machine_id"
 )
-set "FKCLAUDE_USERNAME=user-!ENV_NAME:~0,8!"
+set "CAC_USERNAME=user-!ENV_NAME:~0,8!"
 if exist "!CAC_DIR!\fingerprint-hook.js" (
-    set "NODE_OPTIONS=--require !CAC_DIR!\fingerprint-hook.js"
+    set "NODE_OPTIONS=--require !CAC_DIR!\fingerprint-hook.js !NODE_OPTIONS!"
 )
 
 REM timezone

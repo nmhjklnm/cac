@@ -34,7 +34,8 @@ CAC (Claude Anti-fingerprint Cloak) 有两个版本：
 | OAuth 自动授权 (fkclaude auth) | - | Y |
 | Server + Token 模型 (中心化管理) | - | Y |
 | Relay 本地中转 (绕过 TUN) | - | Y |
-| Windows 支持 (PowerShell + CMD) | - | Y |
+| Windows 基础支持 (cac.ps1 + cac.cmd) | Y | Y |
+| Windows 一键安装 + Relay | - | Y |
 | Admin Web UI | - | Y |
 | GitHub Actions CI/CD | - | Y |
 
@@ -68,7 +69,7 @@ CAC (Claude Anti-fingerprint Cloak) 有两个版本：
 - 文档改进
 - mitmproxy 监控工具增强
 
-商业版的功能（server/relay/auth/Max patch/Windows）不会合入开源版。
+商业版的功能（server/relay/auth/Max patch/一键安装镜像）不会合入开源版。
 
 ## 仓库管理
 
