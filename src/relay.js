@@ -235,8 +235,9 @@ function handleConnect(clientSock, targetHost, targetPort, headerRest) {
       upstreamSock.pipe(clientSock);
 
       // Send any extra data that came in after handshake
+      // upstreamExtra is data from the target server; write it to the client.
       if (upstreamExtra && upstreamExtra.length > 0) {
-        clientSock.unshift(upstreamExtra);
+        clientSock.write(upstreamExtra);
       }
       if (trailingData && trailingData.length > 0) {
         upstreamSock.write(trailingData);
