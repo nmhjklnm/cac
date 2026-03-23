@@ -9,6 +9,8 @@ ENVS_DIR="$CAC_DIR/envs"
 # ━━━ utils.sh ━━━
 # ── utils: 颜色、读写、UUID、proxy 解析 ───────────────────────
 
+CAC_VERSION="1.0.0"
+
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
@@ -131,6 +133,90 @@ _require_env() {
 _find_real_claude() {
     PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/bin" | tr '\n' ':') \
         command -v claude 2>/dev/null || true
+}
+
+_detect_rc_file() {
+    if [[ -f "$HOME/.zshrc" ]]; then
+        echo "$HOME/.zshrc"
+    elif [[ -f "$HOME/.bashrc" ]]; then
+        echo "$HOME/.bashrc"
+    elif [[ -f "$HOME/.bash_profile" ]]; then
+        echo "$HOME/.bash_profile"
+    else
+        echo ""
+    fi
+}
+
+_install_method() {
+    local self="$0"
+    local resolved="$self"
+    if [[ -L "$self" ]]; then
+        resolved=$(readlink "$self" 2>/dev/null || echo "$self")
+        # 处理相对路径的符号链接
+        if [[ "$resolved" != /* ]]; then
+            resolved="$(dirname "$self")/$resolved"
+        fi
+    fi
+    if [[ "$resolved" == *"node_modules"* ]] || [[ -f "$(dirname "$resolved")/package.json" ]]; then
+        echo "npm"
+    else
+        echo "bash"
+    fi
+}
+
+_write_path_to_rc() {
+    local rc_file="${1:-$(_detect_rc_file)}"
+    if [[ -z "$rc_file" ]]; then
+        echo "  $(_yellow '⚠') 未找到 shell 配置文件，请手动添加 PATH："
+        echo '    export PATH="$HOME/bin:$PATH"'
+        echo '    export PATH="$HOME/.cac/bin:$PATH"'
+        return 0
+    fi
+
+    if grep -q '# >>> cac >>>' "$rc_file" 2>/dev/null; then
+        echo "  ✓ PATH 已存在于 $rc_file，跳过"
+        return 0
+    fi
+
+    # 兼容旧格式：如果存在旧的 cac PATH 行，先移除
+    if grep -q '\.cac/bin' "$rc_file" 2>/dev/null; then
+        _remove_path_from_rc "$rc_file"
+    fi
+
+    cat >> "$rc_file" << 'EOF'
+
+# >>> cac — Claude Code Cloak >>>
+export PATH="$HOME/bin:$PATH"          # cac 命令
+export PATH="$HOME/.cac/bin:$PATH"     # claude wrapper
+# <<< cac — Claude Code Cloak <<<
+EOF
+    echo "  ✓ PATH 已写入 $rc_file"
+    return 0
+}
+
+_remove_path_from_rc() {
+    local rc_file="${1:-$(_detect_rc_file)}"
+    [[ -z "$rc_file" ]] && return 0
+
+    # 移除标记块格式（新格式）
+    if grep -q '# >>> cac' "$rc_file" 2>/dev/null; then
+        local tmp="${rc_file}.cac-tmp"
+        awk '/# >>> cac/{skip=1; next} /# <<< cac/{skip=0; next} !skip' "$rc_file" > "$tmp"
+        cat -s "$tmp" > "$rc_file"
+        rm -f "$tmp"
+        echo "  ✓ 已从 $rc_file 移除 PATH 配置"
+        return 0
+    fi
+
+    # 兼容旧格式
+    if grep -qE '(\.cac/bin|# cac —)' "$rc_file" 2>/dev/null; then
+        local tmp="${rc_file}.cac-tmp"
+        grep -vE '(# cac — Claude Code Cloak|\.cac/bin|# cac 命令|# claude wrapper)' "$rc_file" > "$tmp" || true
+        cat -s "$tmp" > "$rc_file"
+        rm -f "$tmp"
+        echo "  ✓ 已从 $rc_file 移除 PATH 配置（旧格式）"
+        return 0
+    fi
 }
 
 _update_statsig() {
@@ -1007,16 +1093,19 @@ cmd_setup() {
         echo "  ✓ health bypass cert → $CAC_DIR/ca/hb_cert.pem"
     fi
 
+    # 自动写入 PATH 到 shell rc 文件
+    local rc_file
+    rc_file=$(_detect_rc_file)
+    _write_path_to_rc "$rc_file"
+
     echo
     echo "── 下一步 ──────────────────────────────────────────────"
-    echo "1. 将以下两行加到 ~/.zshrc 最前面："
+    if [[ -n "$rc_file" ]]; then
+        echo "1. 执行以下命令使配置生效（或重开终端）："
+        echo "   source $rc_file"
+    fi
     echo
-    echo "   export PATH=\"\$HOME/bin:\$PATH\"          # cac 命令"
-    echo "   export PATH=\"$CAC_DIR/bin:\$PATH\"  # claude wrapper"
-    echo
-    echo "2. source ~/.zshrc"
-    echo
-    echo "3. 添加第一个代理环境："
+    echo "2. 添加第一个代理环境："
     echo "   cac add <名字> <host:port:user:pass>"
 }
 
@@ -1673,6 +1762,67 @@ cmd_continue() {
     echo "$(_green "✓") cac 已恢复 — 当前环境：$(_bold "$current")"
 }
 
+# ━━━ cmd_delete.sh ━━━
+# ── cmd: delete（卸载）────────────────────────────────────────
+
+cmd_delete() {
+    echo "=== cac delete ==="
+    echo
+
+    local rc_file
+    rc_file=$(_detect_rc_file)
+
+    _remove_path_from_rc "$rc_file"
+
+    if [[ -d "$CAC_DIR" ]]; then
+        rm -rf "$CAC_DIR"
+        echo "  ✓ 已删除 $CAC_DIR"
+    else
+        echo "  - $CAC_DIR 不存在，跳过"
+    fi
+
+    local method
+    method=$(_install_method)
+    echo
+    if [[ "$method" == "npm" ]]; then
+        echo "  ✓ 已清除所有 cac 数据和配置"
+        echo
+        echo "要完全卸载 cac 命令，请执行："
+        echo "  npm uninstall -g claude-cac"
+    else
+        if [[ -f "$HOME/bin/cac" ]]; then
+            rm -f "$HOME/bin/cac"
+            echo "  ✓ 已删除 $HOME/bin/cac"
+        fi
+        echo "  ✓ 卸载完成"
+    fi
+
+    echo
+    if [[ -n "$rc_file" ]]; then
+        echo "请重开终端或执行 source $rc_file 使变更生效。"
+    else
+        echo "请重开终端使变更生效。"
+    fi
+}
+
+# ━━━ cmd_version.sh ━━━
+# ── cmd: version ───────────────────────────────────────────────
+
+cmd_version() {
+    local method
+    method=$(_install_method)
+
+    local method_label
+    case "$method" in
+        npm)  method_label="npm (Node)" ;;
+        bash) method_label="bash (Shell Script)" ;;
+        *)    method_label="unknown" ;;
+    esac
+
+    echo "cac $CAC_VERSION"
+    echo "安装方式: $method_label"
+}
+
 # ━━━ cmd_help.sh ━━━
 # ── cmd: help ──────────────────────────────────────────────────
 
@@ -1681,7 +1831,7 @@ cat <<EOF
 $(_bold "cac") — Claude Anti-fingerprint Cloak
 
 $(_bold "用法：")
-  cac setup                         首次安装
+  cac setup                         首次安装（自动配置 PATH）
   cac add <名字> <host:port:u:p>    添加新环境（需要 yes 确认）
   cac <名字>                        切换到指定环境
   cac login                         首次登录（通过 cac 保护环境）
@@ -1690,6 +1840,8 @@ $(_bold "用法：")
   cac relay [on|off|status]          本地中转（绕过 TUN）
   cac stop                          临时停用，claude 裸跑
   cac -c                            恢复停用
+  cac delete                        卸载 cac（清除所有数据和配置）
+  cac -v                            查看版本号和安装方式
 
 $(_bold "代理格式：")
   host:port:user:pass    带认证的 SOCKS5
@@ -1733,15 +1885,17 @@ EOF
 [[ $# -eq 0 ]] && { cmd_help; exit 0; }
 
 case "$1" in
-    setup)          cmd_setup         ;;
-    add)            cmd_add  "${@:2}" ;;
-    ls|list)        cmd_ls            ;;
-    check)          cmd_check         ;;
-    login)          cmd_login         ;;
-    stop)           cmd_stop          ;;
-    -c)             cmd_continue      ;;
-    relay)          cmd_relay "${@:2}" ;;
-    help|--help|-h) cmd_help          ;;
-    *)              cmd_switch "$1"   ;;
+    setup)              cmd_setup         ;;
+    add)                cmd_add  "${@:2}" ;;
+    ls|list)            cmd_ls            ;;
+    check)              cmd_check         ;;
+    login)              cmd_login         ;;
+    stop)               cmd_stop          ;;
+    -c)                 cmd_continue      ;;
+    relay)              cmd_relay "${@:2}" ;;
+    delete|uninstall)   cmd_delete        ;;
+    -v|--version)       cmd_version       ;;
+    help|--help|-h)     cmd_help          ;;
+    *)                  cmd_switch "$1"   ;;
 esac
 
