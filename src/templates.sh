@@ -114,7 +114,62 @@ fi
 # 执行真实 claude
 _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 [[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }
-exec "$_real" "$@"
+
+# ── Relay 本地中转（绕过 TUN）──
+_relay_active=false
+if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+    _relay_js="$CAC_DIR/relay.js"
+    _relay_pid_file="$CAC_DIR/relay.pid"
+    _relay_port_file="$CAC_DIR/relay.port"
+
+    # 检查 relay 是否已在运行
+    _relay_running=false
+    if [[ -f "$_relay_pid_file" ]]; then
+        _rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
+        kill -0 "$_rpid" 2>/dev/null && _relay_running=true
+    fi
+
+    # 未运行则启动
+    if [[ "$_relay_running" != "true" ]] && [[ -f "$_relay_js" ]]; then
+        _rport=17890
+        while (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null; do
+            (( _rport++ ))
+            [[ $_rport -gt 17999 ]] && break
+        done
+        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+        disown
+        for _ri in {1..30}; do
+            (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
+            sleep 0.1
+        done
+        echo "$_rport" > "$_relay_port_file"
+    fi
+
+    # 覆盖代理指向本地 relay
+    if [[ -f "$_relay_port_file" ]]; then
+        _rport=$(tr -d '[:space:]' < "$_relay_port_file")
+        export HTTPS_PROXY="http://127.0.0.1:$_rport"
+        export HTTP_PROXY="http://127.0.0.1:$_rport"
+        export ALL_PROXY="http://127.0.0.1:$_rport"
+        _relay_active=true
+    fi
+fi
+
+# relay 模式下不能 exec（需保留进程做清理）
+if [[ "$_relay_active" == "true" ]]; then
+    _cleanup_relay() {
+        local _p; _p=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
+        [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
+        rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
+    }
+    trap _cleanup_relay EXIT INT TERM
+    "$_real" "$@"
+    _ec=$?
+    _cleanup_relay
+    exit "$_ec"
+else
+    exec "$_real" "$@"
+fi
 WRAPPER_EOF
     chmod +x "$CAC_DIR/bin/claude"
 }

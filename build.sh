@@ -14,6 +14,7 @@ SOURCES=(
     templates.sh
     cmd_setup.sh
     cmd_env.sh
+    cmd_relay.sh
     cmd_check.sh
     cmd_stop.sh
     cmd_delete.sh
@@ -47,5 +48,6 @@ SOURCES=(
 chmod +x "$OUT"
 
 cp src/fingerprint-hook.js fingerprint-hook.js 2>/dev/null || true
+cp src/relay.js relay.js 2>/dev/null || true
 
 echo "✓ 构建完成 → ${OUT} ($(wc -l < "${OUT}") 行)"

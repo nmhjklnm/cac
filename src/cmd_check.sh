@@ -134,6 +134,27 @@ cmd_check() {
     _check_proxy_conflict "$proxy" "$proxy_ip"
 
     echo
+    echo "── Relay 中转 ────────────────────────────────────────"
+    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
+        printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
+        if _relay_is_running; then
+            local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
+            local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
+            printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+        else
+            printf "  Relay 进程 ... %s\n" "$(_yellow "未启动（将在 claude 启动时自动启动）")"
+        fi
+        if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
+            printf "  直连路由   ... %s\n" "$(_read "$CAC_DIR/relay_route_ip")"
+        fi
+    else
+        echo "  Relay 模式 ... 未启用"
+        if _detect_tun_active 2>/dev/null; then
+            echo "    $(_yellow "⚠") 检测到 TUN 模式，建议运行 'cac relay on' 绕过冲突"
+        fi
+    fi
+
+    echo
     echo "── 安全防护状态 ──────────────────────────────────────"
 
     # ── NS 层级 DNS 拦截 ──

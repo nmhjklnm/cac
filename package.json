@@ -10,6 +10,7 @@
     "cac.ps1",
     "cac.cmd",
     "fingerprint-hook.js",
+    "relay.js",
     "scripts/postinstall.js",
     "README.md",
     "LICENSE"

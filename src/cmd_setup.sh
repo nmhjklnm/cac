@@ -30,6 +30,16 @@ cmd_setup() {
         echo "  ⚠ fingerprint-hook.js 未找到，Node.js 级指纹拦截不可用" >&2
     fi
 
+    # 复制 relay.js
+    local _relay_src
+    _relay_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relay.js"
+    if [[ -f "$_relay_src" ]]; then
+        cp "$_relay_src" "$CAC_DIR/relay.js"
+        echo "  ✓ relay → $CAC_DIR/relay.js"
+    elif [[ -f "$CAC_DIR/relay.js" ]]; then
+        echo "  ✓ relay（已存在）"
+    fi
+
     _write_hostname_shim
     _write_ifconfig_shim
 

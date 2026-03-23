@@ -10,6 +10,7 @@ $(_bold "用法：")
   cac <名字>                        切换到指定环境
   cac ls                            列出所有环境
   cac check                         核查当前环境（代理 + 安全防护）
+  cac relay [on|off|status]          本地中转（绕过 TUN）
   cac stop                          临时停用，claude 裸跑
   cac -c                            恢复停用
   cac delete                        卸载 cac（清除所有数据和配置）
@@ -18,6 +19,12 @@ $(_bold "用法：")
 $(_bold "代理格式：")
   host:port:user:pass    带认证的 SOCKS5
   host:port              无认证的 SOCKS5
+
+$(_bold "Relay 中转：")
+  cac relay on              启用本地中转（绕过 TUN/Clash 等代理冲突）
+  cac relay on --route      启用 + 添加直连路由（需 sudo，解决激进 TUN）
+  cac relay off             停用
+  cac relay status          查看状态
 
 $(_bold "安全防护：")
   NS 层级 DNS 拦截       拦截 statsig.anthropic.com 等遥测域名
@@ -38,6 +45,9 @@ $(_bold "文件目录：")
   ~/.cac/blocked_hosts        HOSTALIASES 遥测域名拦截
   ~/.cac/ca/                  mTLS 自签 CA 证书
   ~/.cac/current              当前激活的环境名
+  ~/.cac/relay.js                relay 本地中转服务
+  ~/.cac/relay.pid               relay 进程 PID
+  ~/.cac/relay.port              relay 监听端口
   ~/.cac/envs/<name>/         各环境：proxy / uuid / stable_id / client_cert
 EOF
 }

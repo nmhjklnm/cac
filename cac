@@ -9,8 +9,6 @@ ENVS_DIR="$CAC_DIR/envs"
 # ━━━ utils.sh ━━━
 # ── utils: 颜色、读写、UUID、proxy 解析 ───────────────────────
 
-CAC_VERSION="1.0.0"
-
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
@@ -133,90 +131,6 @@ _require_env() {
 _find_real_claude() {
     PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "$CAC_DIR/bin" | tr '\n' ':') \
         command -v claude 2>/dev/null || true
-}
-
-_detect_rc_file() {
-    if [[ -f "$HOME/.zshrc" ]]; then
-        echo "$HOME/.zshrc"
-    elif [[ -f "$HOME/.bashrc" ]]; then
-        echo "$HOME/.bashrc"
-    elif [[ -f "$HOME/.bash_profile" ]]; then
-        echo "$HOME/.bash_profile"
-    else
-        echo ""
-    fi
-}
-
-_install_method() {
-    local self="$0"
-    local resolved="$self"
-    if [[ -L "$self" ]]; then
-        resolved=$(readlink "$self" 2>/dev/null || echo "$self")
-        # 处理相对路径的符号链接
-        if [[ "$resolved" != /* ]]; then
-            resolved="$(dirname "$self")/$resolved"
-        fi
-    fi
-    if [[ "$resolved" == *"node_modules"* ]] || [[ -f "$(dirname "$resolved")/package.json" ]]; then
-        echo "npm"
-    else
-        echo "bash"
-    fi
-}
-
-_write_path_to_rc() {
-    local rc_file="${1:-$(_detect_rc_file)}"
-    if [[ -z "$rc_file" ]]; then
-        echo "  $(_yellow '⚠') 未找到 shell 配置文件，请手动添加 PATH："
-        echo '    export PATH="$HOME/bin:$PATH"'
-        echo '    export PATH="$HOME/.cac/bin:$PATH"'
-        return 0
-    fi
-
-    if grep -q '# >>> cac >>>' "$rc_file" 2>/dev/null; then
-        echo "  ✓ PATH 已存在于 $rc_file，跳过"
-        return 0
-    fi
-
-    # 兼容旧格式：如果存在旧的 cac PATH 行，先移除
-    if grep -q '\.cac/bin' "$rc_file" 2>/dev/null; then
-        _remove_path_from_rc "$rc_file"
-    fi
-
-    cat >> "$rc_file" << 'EOF'
-
-# >>> cac — Claude Code Cloak >>>
-export PATH="$HOME/bin:$PATH"          # cac 命令
-export PATH="$HOME/.cac/bin:$PATH"     # claude wrapper
-# <<< cac — Claude Code Cloak <<<
-EOF
-    echo "  ✓ PATH 已写入 $rc_file"
-    return 0
-}
-
-_remove_path_from_rc() {
-    local rc_file="${1:-$(_detect_rc_file)}"
-    [[ -z "$rc_file" ]] && return 0
-
-    # 移除标记块格式（新格式）
-    if grep -q '# >>> cac' "$rc_file" 2>/dev/null; then
-        local tmp="${rc_file}.cac-tmp"
-        awk '/# >>> cac/{skip=1; next} /# <<< cac/{skip=0; next} !skip' "$rc_file" > "$tmp"
-        cat -s "$tmp" > "$rc_file"
-        rm -f "$tmp"
-        echo "  ✓ 已从 $rc_file 移除 PATH 配置"
-        return 0
-    fi
-
-    # 兼容旧格式
-    if grep -qE '(\.cac/bin|# cac —)' "$rc_file" 2>/dev/null; then
-        local tmp="${rc_file}.cac-tmp"
-        grep -vE '(# cac — Claude Code Cloak|\.cac/bin|# cac 命令|# claude wrapper)' "$rc_file" > "$tmp" || true
-        cat -s "$tmp" > "$rc_file"
-        rm -f "$tmp"
-        echo "  ✓ 已从 $rc_file 移除 PATH 配置（旧格式）"
-        return 0
-    fi
 }
 
 _update_statsig() {
@@ -774,7 +688,62 @@ fi
 # 执行真实 claude
 _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 [[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }
-exec "$_real" "$@"
+
+# ── Relay 本地中转（绕过 TUN）──
+_relay_active=false
+if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+    _relay_js="$CAC_DIR/relay.js"
+    _relay_pid_file="$CAC_DIR/relay.pid"
+    _relay_port_file="$CAC_DIR/relay.port"
+
+    # 检查 relay 是否已在运行
+    _relay_running=false
+    if [[ -f "$_relay_pid_file" ]]; then
+        _rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
+        kill -0 "$_rpid" 2>/dev/null && _relay_running=true
+    fi
+
+    # 未运行则启动
+    if [[ "$_relay_running" != "true" ]] && [[ -f "$_relay_js" ]]; then
+        _rport=17890
+        while (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null; do
+            (( _rport++ ))
+            [[ $_rport -gt 17999 ]] && break
+        done
+        node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+        disown
+        for _ri in {1..30}; do
+            (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
+            sleep 0.1
+        done
+        echo "$_rport" > "$_relay_port_file"
+    fi
+
+    # 覆盖代理指向本地 relay
+    if [[ -f "$_relay_port_file" ]]; then
+        _rport=$(tr -d '[:space:]' < "$_relay_port_file")
+        export HTTPS_PROXY="http://127.0.0.1:$_rport"
+        export HTTP_PROXY="http://127.0.0.1:$_rport"
+        export ALL_PROXY="http://127.0.0.1:$_rport"
+        _relay_active=true
+    fi
+fi
+
+# relay 模式下不能 exec（需保留进程做清理）
+if [[ "$_relay_active" == "true" ]]; then
+    _cleanup_relay() {
+        local _p; _p=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
+        [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
+        rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
+    }
+    trap _cleanup_relay EXIT INT TERM
+    "$_real" "$@"
+    _ec=$?
+    _cleanup_relay
+    exit "$_ec"
+else
+    exec "$_real" "$@"
+fi
 WRAPPER_EOF
     chmod +x "$CAC_DIR/bin/claude"
 }
@@ -915,6 +884,16 @@ cmd_setup() {
         echo "  ⚠ fingerprint-hook.js 未找到，Node.js 级指纹拦截不可用" >&2
     fi
 
+    # 复制 relay.js
+    local _relay_src
+    _relay_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relay.js"
+    if [[ -f "$_relay_src" ]]; then
+        cp "$_relay_src" "$CAC_DIR/relay.js"
+        echo "  ✓ relay → $CAC_DIR/relay.js"
+    elif [[ -f "$CAC_DIR/relay.js" ]]; then
+        echo "  ✓ relay（已存在）"
+    fi
+
     _write_hostname_shim
     _write_ifconfig_shim
 
@@ -940,19 +919,16 @@ cmd_setup() {
     _generate_ca_cert
     echo "  ✓ mTLS CA → $CAC_DIR/ca/ca_cert.pem"
 
-    # 自动写入 PATH 到 shell rc 文件
-    local rc_file
-    rc_file=$(_detect_rc_file)
-    _write_path_to_rc "$rc_file"
-
     echo
     echo "── 下一步 ──────────────────────────────────────────────"
-    if [[ -n "$rc_file" ]]; then
-        echo "1. 执行以下命令使配置生效（或重开终端）："
-        echo "   source $rc_file"
-    fi
+    echo "1. 将以下两行加到 ~/.zshrc 最前面："
     echo
-    echo "2. 添加第一个代理环境："
+    echo "   export PATH=\"\$HOME/bin:\$PATH\"          # cac 命令"
+    echo "   export PATH=\"$CAC_DIR/bin:\$PATH\"  # claude wrapper"
+    echo
+    echo "2. source ~/.zshrc"
+    echo
+    echo "3. 添加第一个代理环境："
     echo "   cac add <名字> <host:port:user:pass>"
 }
 
@@ -979,8 +955,7 @@ cmd_add() {
     # 如果用户未指定协议，自动探测 http/socks5/https
     if [[ ! "$raw_proxy" =~ ^(http|https|socks5):// ]]; then
         printf "  自动检测代理协议 ... "
-        proxy=$(_auto_detect_proxy "$raw_proxy")
-        if [[ $? -eq 0 ]]; then
+        if proxy=$(_auto_detect_proxy "$raw_proxy"); then
             echo "$(_green "$(echo "$proxy" | grep -oE '^[a-z]+')://")"
         else
             echo "$(_yellow "检测失败，使用默认 http://")"
@@ -1075,6 +1050,18 @@ cmd_switch() {
     _update_statsig "$(_read "$ENVS_DIR/$name/stable_id")"
     _update_claude_json_user_id "$(_read "$ENVS_DIR/$name/user_id")"
 
+    # Relay 生命周期：切换环境时重启 relay
+    _relay_stop 2>/dev/null || true
+    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
+        printf "  启动 relay ... "
+        if _relay_start "$name"; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port")
+            echo "$(_green "✓") 127.0.0.1:$rport"
+        else
+            echo "$(_yellow "⚠ 启动失败，claude 启动时会重试")"
+        fi
+    fi
+
     echo "$(_green "✓") 已切换到 $(_bold "$name")"
 }
 
@@ -1101,6 +1088,219 @@ cmd_ls() {
             printf "    %s\n" "$proxy"
         fi
     done
+}
+
+# ━━━ cmd_relay.sh ━━━
+# ── cmd: relay（本地中转，绕过 TUN）──────────────────────────────
+
+_relay_start() {
+    local name="${1:-$(_current_env)}"
+    local env_dir="$ENVS_DIR/$name"
+    local proxy; proxy=$(_read "$env_dir/proxy")
+    [[ -z "$proxy" ]] && return 1
+
+    local relay_js="$CAC_DIR/relay.js"
+    [[ -f "$relay_js" ]] || { echo "错误：relay.js 未找到，请运行 'cac setup'" >&2; return 1; }
+
+    # 寻找可用端口（17890-17999）
+    local port=17890
+    while (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; do
+        (( port++ ))
+        if [[ $port -gt 17999 ]]; then
+            echo "错误：端口 17890-17999 全部被占用" >&2
+            return 1
+        fi
+    done
+
+    local pid_file="$CAC_DIR/relay.pid"
+    node "$relay_js" "$port" "$proxy" "$pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
+    disown
+
+    # 等待 relay 就绪
+    local i
+    for i in {1..30}; do
+        (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null && break
+        sleep 0.1
+    done
+
+    if ! (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; then
+        echo "错误：relay 启动超时" >&2
+        return 1
+    fi
+
+    echo "$port" > "$CAC_DIR/relay.port"
+    return 0
+}
+
+_relay_stop() {
+    local pid_file="$CAC_DIR/relay.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid; pid=$(tr -d '[:space:]' < "$pid_file")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            # 等待进程退出
+            local i
+            for i in {1..20}; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
+        fi
+        rm -f "$pid_file"
+    fi
+    rm -f "$CAC_DIR/relay.port"
+
+    # 清理路由
+    _relay_remove_route 2>/dev/null || true
+}
+
+_relay_is_running() {
+    local pid_file="$CAC_DIR/relay.pid"
+    [[ -f "$pid_file" ]] || return 1
+    local pid; pid=$(tr -d '[:space:]' < "$pid_file")
+    [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# ── 路由管理（绕过 TUN 的直连路由）──────────────────────────────
+
+_relay_add_route() {
+    local proxy="$1"
+    local proxy_host; proxy_host=$(_proxy_host_port "$proxy")
+    proxy_host="${proxy_host%%:*}"
+
+    # 跳过已是 IP 的回环地址
+    [[ "$proxy_host" == "127."* || "$proxy_host" == "localhost" ]] && return 0
+
+    # 解析为 IP
+    local proxy_ip
+    proxy_ip=$(python3 -c "import socket; print(socket.gethostbyname('$proxy_host'))" 2>/dev/null || echo "$proxy_host")
+
+    local os; os=$(_detect_os)
+    if [[ "$os" == "macos" ]]; then
+        local gateway
+        gateway=$(route -n get default 2>/dev/null | awk '/gateway:/{print $2}')
+        [[ -z "$gateway" ]] && return 1
+
+        # 检查是否已有直连路由
+        local current_gw
+        current_gw=$(route -n get "$proxy_ip" 2>/dev/null | awk '/gateway:/{print $2}')
+        [[ "$current_gw" == "$gateway" ]] && return 0
+
+        echo "  添加直连路由：$proxy_ip → $gateway（需要 sudo）"
+        sudo route add -host "$proxy_ip" "$gateway" >/dev/null 2>&1 || return 1
+        echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
+
+    elif [[ "$os" == "linux" ]]; then
+        local gateway iface
+        gateway=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+        iface=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+        [[ -z "$gateway" ]] && return 1
+
+        echo "  添加直连路由：$proxy_ip → $gateway dev $iface（需要 sudo）"
+        sudo ip route add "$proxy_ip/32" via "$gateway" dev "$iface" 2>/dev/null || return 1
+        echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
+    fi
+}
+
+_relay_remove_route() {
+    local route_file="$CAC_DIR/relay_route_ip"
+    [[ -f "$route_file" ]] || return 0
+
+    local proxy_ip; proxy_ip=$(tr -d '[:space:]' < "$route_file")
+    [[ -z "$proxy_ip" ]] && return 0
+
+    local os; os=$(_detect_os)
+    if [[ "$os" == "macos" ]]; then
+        sudo route delete -host "$proxy_ip" >/dev/null 2>&1 || true
+    elif [[ "$os" == "linux" ]]; then
+        sudo ip route del "$proxy_ip/32" 2>/dev/null || true
+    fi
+    rm -f "$route_file"
+}
+
+# 检测 TUN 网卡是否活跃
+_detect_tun_active() {
+    local os; os=$(_detect_os)
+    if [[ "$os" == "macos" ]]; then
+        local tun_count
+        tun_count=$(ifconfig 2>/dev/null | grep -cE '^utun[0-9]+' || echo 0)
+        [[ "$tun_count" -gt 3 ]]
+    elif [[ "$os" == "linux" ]]; then
+        ip link show tun0 >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+# ── 用户命令 ─────────────────────────────────────────────────────
+
+cmd_relay() {
+    _require_setup
+    local current; current=$(_current_env)
+    [[ -z "$current" ]] && { echo "错误：未激活环境，先运行 'cac <name>'" >&2; exit 1; }
+
+    local env_dir="$ENVS_DIR/$current"
+    local action="${1:-status}"
+    local flag="${2:-}"
+
+    case "$action" in
+        on)
+            echo "on" > "$env_dir/relay"
+            echo "$(_green "✓") Relay 已启用（环境：$(_bold "$current")）"
+
+            # --route 标志：添加直连路由
+            if [[ "$flag" == "--route" ]]; then
+                local proxy; proxy=$(_read "$env_dir/proxy")
+                _relay_add_route "$proxy"
+            fi
+
+            # 如果 relay 没在运行，启动它
+            if ! _relay_is_running; then
+                printf "  启动 relay ... "
+                if _relay_start "$current"; then
+                    local port; port=$(_read "$CAC_DIR/relay.port")
+                    echo "$(_green "✓") 127.0.0.1:$port"
+                else
+                    echo "$(_red "✗ 启动失败")"
+                fi
+            fi
+            echo "  下次启动 claude 时将自动通过本地中转连接代理"
+            ;;
+        off)
+            rm -f "$env_dir/relay"
+            _relay_stop
+            echo "$(_green "✓") Relay 已停用（环境：$(_bold "$current")）"
+            ;;
+        status)
+            if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
+                echo "Relay 模式：$(_green "已启用")"
+            else
+                echo "Relay 模式：未启用"
+                if _detect_tun_active; then
+                    echo "  $(_yellow "⚠") 检测到 TUN 模式，建议运行 'cac relay on'"
+                fi
+                return
+            fi
+
+            if _relay_is_running; then
+                local pid; pid=$(_read "$CAC_DIR/relay.pid")
+                local port; port=$(_read "$CAC_DIR/relay.port" "未知")
+                echo "Relay 进程：$(_green "运行中") (PID=$pid, 端口=$port)"
+            else
+                echo "Relay 进程：$(_yellow "未启动")（将在 claude 启动时自动启动）"
+            fi
+
+            if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
+                local route_ip; route_ip=$(_read "$CAC_DIR/relay_route_ip")
+                echo "直连路由  ：$route_ip"
+            fi
+            ;;
+        *)
+            echo "用法：cac relay [on|off|status]" >&2
+            echo "  on [--route]  启用本地中转（--route 添加直连路由绕过 TUN）" >&2
+            echo "  off           停用本地中转" >&2
+            echo "  status        查看状态" >&2
+            ;;
+    esac
 }
 
 # ━━━ cmd_check.sh ━━━
@@ -1240,6 +1440,27 @@ cmd_check() {
     _check_proxy_conflict "$proxy" "$proxy_ip"
 
     echo
+    echo "── Relay 中转 ────────────────────────────────────────"
+    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
+        printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
+        if _relay_is_running; then
+            local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
+            local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
+            printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+        else
+            printf "  Relay 进程 ... %s\n" "$(_yellow "未启动（将在 claude 启动时自动启动）")"
+        fi
+        if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
+            printf "  直连路由   ... %s\n" "$(_read "$CAC_DIR/relay_route_ip")"
+        fi
+    else
+        echo "  Relay 模式 ... 未启用"
+        if _detect_tun_active 2>/dev/null; then
+            echo "    $(_yellow "⚠") 检测到 TUN 模式，建议运行 'cac relay on' 绕过冲突"
+        fi
+    fi
+
+    echo
     echo "── 安全防护状态 ──────────────────────────────────────"
 
     # ── NS 层级 DNS 拦截 ──
@@ -1304,67 +1525,6 @@ cmd_continue() {
     echo "$(_green "✓") cac 已恢复 — 当前环境：$(_bold "$current")"
 }
 
-# ━━━ cmd_delete.sh ━━━
-# ── cmd: delete（卸载）────────────────────────────────────────
-
-cmd_delete() {
-    echo "=== cac delete ==="
-    echo
-
-    local rc_file
-    rc_file=$(_detect_rc_file)
-
-    _remove_path_from_rc "$rc_file"
-
-    if [[ -d "$CAC_DIR" ]]; then
-        rm -rf "$CAC_DIR"
-        echo "  ✓ 已删除 $CAC_DIR"
-    else
-        echo "  - $CAC_DIR 不存在，跳过"
-    fi
-
-    local method
-    method=$(_install_method)
-    echo
-    if [[ "$method" == "npm" ]]; then
-        echo "  ✓ 已清除所有 cac 数据和配置"
-        echo
-        echo "要完全卸载 cac 命令，请执行："
-        echo "  npm uninstall -g claude-cac"
-    else
-        if [[ -f "$HOME/bin/cac" ]]; then
-            rm -f "$HOME/bin/cac"
-            echo "  ✓ 已删除 $HOME/bin/cac"
-        fi
-        echo "  ✓ 卸载完成"
-    fi
-
-    echo
-    if [[ -n "$rc_file" ]]; then
-        echo "请重开终端或执行 source $rc_file 使变更生效。"
-    else
-        echo "请重开终端使变更生效。"
-    fi
-}
-
-# ━━━ cmd_version.sh ━━━
-# ── cmd: version ───────────────────────────────────────────────
-
-cmd_version() {
-    local method
-    method=$(_install_method)
-
-    local method_label
-    case "$method" in
-        npm)  method_label="npm (Node)" ;;
-        bash) method_label="bash (Shell Script)" ;;
-        *)    method_label="unknown" ;;
-    esac
-
-    echo "cac $CAC_VERSION"
-    echo "安装方式: $method_label"
-}
-
 # ━━━ cmd_help.sh ━━━
 # ── cmd: help ──────────────────────────────────────────────────
 
@@ -1373,19 +1533,24 @@ cat <<EOF
 $(_bold "cac") — Claude Anti-fingerprint Cloak
 
 $(_bold "用法：")
-  cac setup                         首次安装（自动配置 PATH）
+  cac setup                         首次安装
   cac add <名字> <host:port:u:p>    添加新环境（需要 yes 确认）
   cac <名字>                        切换到指定环境
   cac ls                            列出所有环境
   cac check                         核查当前环境（代理 + 安全防护）
+  cac relay [on|off|status]          本地中转（绕过 TUN）
   cac stop                          临时停用，claude 裸跑
   cac -c                            恢复停用
-  cac delete                        卸载 cac（清除所有数据和配置）
-  cac -v                            查看版本号和安装方式
 
 $(_bold "代理格式：")
   host:port:user:pass    带认证的 SOCKS5
   host:port              无认证的 SOCKS5
+
+$(_bold "Relay 中转：")
+  cac relay on              启用本地中转（绕过 TUN/Clash 等代理冲突）
+  cac relay on --route      启用 + 添加直连路由（需 sudo，解决激进 TUN）
+  cac relay off             停用
+  cac relay status          查看状态
 
 $(_bold "安全防护：")
   NS 层级 DNS 拦截       拦截 statsig.anthropic.com 等遥测域名
@@ -1406,6 +1571,9 @@ $(_bold "文件目录：")
   ~/.cac/blocked_hosts        HOSTALIASES 遥测域名拦截
   ~/.cac/ca/                  mTLS 自签 CA 证书
   ~/.cac/current              当前激活的环境名
+  ~/.cac/relay.js                relay 本地中转服务
+  ~/.cac/relay.pid               relay 进程 PID
+  ~/.cac/relay.port              relay 监听端口
   ~/.cac/envs/<name>/         各环境：proxy / uuid / stable_id / client_cert
 EOF
 }
@@ -1416,15 +1584,14 @@ EOF
 [[ $# -eq 0 ]] && { cmd_help; exit 0; }
 
 case "$1" in
-    setup)              cmd_setup         ;;
-    add)                cmd_add  "${@:2}" ;;
-    ls|list)            cmd_ls            ;;
-    check)              cmd_check         ;;
-    stop)               cmd_stop          ;;
-    -c)                 cmd_continue      ;;
-    delete|uninstall)   cmd_delete        ;;
-    -v|--version)       cmd_version       ;;
-    help|--help|-h)     cmd_help          ;;
-    *)                  cmd_switch "$1"   ;;
+    setup)          cmd_setup         ;;
+    add)            cmd_add  "${@:2}" ;;
+    ls|list)        cmd_ls            ;;
+    check)          cmd_check         ;;
+    stop)           cmd_stop          ;;
+    -c)             cmd_continue      ;;
+    relay)          cmd_relay "${@:2}" ;;
+    help|--help|-h) cmd_help          ;;
+    *)              cmd_switch "$1"   ;;
 esac
 
