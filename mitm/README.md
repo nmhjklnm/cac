@@ -19,7 +19,7 @@ cd /path/to/cac
 bash mitm/install.sh
 
 # 2. 确保已切换到一个 cac 环境
-fkclaude us1
+cac us1
 
 # 3. 一键抓包启动
 ~/.cac/bin/claude-mitm
@@ -149,5 +149,5 @@ rm -rf ~/.mitmproxy
 bash mitm/install.sh
 
 # claude 连接失败 — 检查远端代理是否通
-fkclaude check
+cac check
 ```
