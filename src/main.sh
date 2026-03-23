@@ -7,7 +7,6 @@ case "$1" in
     add)                cmd_add  "${@:2}" ;;
     ls|list)            cmd_ls            ;;
     check)              cmd_check         ;;
-    login)              cmd_login         ;;
     stop)               cmd_stop          ;;
     -c)                 cmd_continue      ;;
     relay)              cmd_relay "${@:2}" ;;

@@ -8,7 +8,6 @@ $(_bold "用法：")
   cac setup                         首次安装（自动配置 PATH）
   cac add <名字> <host:port:u:p>    添加新环境（需要 yes 确认）
   cac <名字>                        切换到指定环境
-  cac login                         首次登录（通过 cac 保护环境）
   cac ls                            列出所有环境
   cac check                         核查当前环境（代理 + 安全防护）
   cac relay [on|off|status]          本地中转（绕过 TUN）

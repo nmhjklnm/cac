@@ -29,7 +29,7 @@ This is a pure Bash project with Node.js runtime components. The `src/` director
 | `src/cmd_env.sh` | `cac add / switch / ls` — creates/activates profiles under `~/.cac/envs/<name>/` |
 | `src/cmd_relay.sh` | `cac relay on/off/status` — relay lifecycle, route management, TUN detection |
 | `src/cmd_check.sh` | `cac check` — verifies proxy, security protections, relay status, TUN conflicts |
-| `src/cmd_stop.sh` | `cac login` — first-time OAuth login; `cac stop / -c` — toggles `~/.cac/stopped` flag |
+| `src/cmd_stop.sh` | `cac stop / -c` — toggles `~/.cac/stopped` flag |
 | `src/cmd_help.sh` | `cac help` output |
 | `src/main.sh` | Entry point: argument dispatch (`case "$1"`) |
 

@@ -73,8 +73,7 @@ cac setup
 cac setup                                       # 首次初始化
 cac add us1 1.2.3.4:1080:username:password      # 添加配置
 cac us1                                          # 切换配置
-cac login                                        # 首次 OAuth 登录
-claude                                           # 启动 Claude Code
+claude                                           # 启动 Claude Code（首次需 /login）
 ```
 
 ### 命令
@@ -84,7 +83,6 @@ claude                                           # 启动 Claude Code
 | `cac setup` | 首次安装 |
 | `cac add <名字> <代理>` | 添加配置（`host:port:user:pass` 或完整 URL） |
 | `cac <名字>` | 切换配置 |
-| `cac login` | 首次 OAuth 登录（全程 cac 保护） |
 | `cac ls` | 列出所有配置 |
 | `cac check` | 检查代理、安全防护、TUN 冲突 |
 | `cac relay on [--route]` | 启用本地中转（绕过 TUN） |
@@ -132,7 +130,7 @@ TUN 代理冲突时启用 relay：
 
 ### 注意事项
 
-- **首次登录**：`cac setup` 后运行 `cac login`，健康检查会自动 bypass。
+- **首次登录**：启动 `claude` 后，在界面内输入 `/login` 完成 OAuth 授权。健康检查由 cac 自动 bypass。
 - **TUN 冲突**：使用 `cac relay on` 或在 TUN 软件中为代理 IP 添加 DIRECT 规则。`cac check` 会自动检测。
 - **API 环境变量**：wrapper 启动时自动清除 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`。
 - **IPv6**：建议系统级关闭，防止真实地址泄露。
@@ -199,8 +197,7 @@ cac setup
 cac setup                                       # first-time init
 cac add us1 1.2.3.4:1080:username:password      # add profile
 cac us1                                          # switch
-cac login                                        # first-time OAuth login
-claude                                           # run Claude Code
+claude                                           # run Claude Code (first time: /login)
 ```
 
 ### Commands
@@ -210,7 +207,6 @@ claude                                           # run Claude Code
 | `cac setup` | First-time setup |
 | `cac add <name> <proxy>` | Add profile (`host:port:user:pass` or full URL) |
 | `cac <name>` | Switch to profile |
-| `cac login` | First-time OAuth login (with full cac protection) |
 | `cac ls` | List profiles |
 | `cac check` | Verify proxy, fingerprint, TUN conflicts |
 | `cac relay on [--route]` | Enable local relay (bypass TUN) |
@@ -258,7 +254,7 @@ When TUN-mode proxy software (Clash, Surge) causes conflicts:
 
 ### Notes
 
-- **First login**: Run `cac login` after `cac setup`. Health check is automatically bypassed.
+- **First login**: Run `claude`, then type `/login` in the interface. Health check is automatically bypassed by cac.
 - **TUN conflicts**: Use `cac relay on` or add DIRECT rule in your TUN software. `cac check` detects this.
 - **API env vars**: Wrapper clears `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY`.
 - **IPv6**: Recommend disabling system-wide to prevent real address exposure.
