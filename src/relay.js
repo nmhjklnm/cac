@@ -133,15 +133,15 @@ function httpConnect(targetHost, targetPort, cb) {
     connectReq += '\r\n';
     sock.write(connectReq);
 
-    let buf = '';
+    let buf = Buffer.alloc(0);
     sock.on('data', function onData(chunk) {
-      buf += chunk.toString();
+      buf = Buffer.concat([buf, chunk]);
       const idx = buf.indexOf('\r\n\r\n');
       if (idx === -1) return;
 
-      const statusLine = buf.substring(0, buf.indexOf('\r\n'));
+      const statusLine = buf.slice(0, buf.indexOf('\r\n')).toString();
       const statusCode = parseInt(statusLine.split(' ')[1], 10);
-      const remaining = Buffer.from(buf.substring(idx + 4));
+      const remaining = buf.slice(idx + 4);
 
       sock.removeListener('data', onData);
 
@@ -207,16 +207,18 @@ const server = net.createServer({ pauseOnConnect: true }, (clientSock) => {
 
 function handleConnect(clientSock, targetHost, targetPort, headerRest) {
   // Consume remaining headers until \r\n\r\n
-  let restBuf = headerRest;
+  // Keep as Buffer to avoid corrupting binary data (e.g. TLS ClientHello)
+  // that may arrive in the same chunk as the last header bytes.
+  let restBuf = Buffer.from(headerRest);
   const consumeHeaders = () => {
     const endIdx = restBuf.indexOf('\r\n\r\n');
     if (endIdx !== -1) {
-      const trailing = restBuf.substring(endIdx + 4);
+      const trailing = restBuf.slice(endIdx + 4);
       doConnect(trailing);
       return;
     }
     clientSock.once('data', (chunk) => {
-      restBuf += chunk.toString();
+      restBuf = Buffer.concat([restBuf, chunk]);
       consumeHeaders();
     });
   };
