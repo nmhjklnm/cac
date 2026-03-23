@@ -726,16 +726,18 @@ _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] 错误：环境 '$_name' 不存在" >&2; exit 1; }
 
-PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+PROXY=$(cat "$_env_dir/proxy" 2>/dev/null | tr -d '[:space:]' || true)
 
-# pre-flight：代理连通性（纯 bash，无 fork）
-_hp="${PROXY##*@}"; _hp="${_hp##*://}"
-_host="${_hp%%:*}"
-_port="${_hp##*:}"
-if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
-    echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
-    echo "[cac] 提示：运行 'cac check' 排查，或 'cacstop' 临时停用" >&2
-    exit 1
+# pre-flight：代理连通性（纯 bash，无 fork）—— 仅在配置了代理时执行
+if [[ -n "$PROXY" ]]; then
+    _hp="${PROXY##*@}"; _hp="${_hp##*://}"
+    _host="${_hp%%:*}"
+    _port="${_hp##*:}"
+    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+        echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
+        echo "[cac] 提示：运行 'cac check' 排查，或 'cacstop' 临时停用" >&2
+        exit 1
+    fi
 fi
 
 # 注入 statsig stable_id
@@ -746,10 +748,12 @@ if [[ -f "$_env_dir/stable_id" ]]; then
     done
 fi
 
-# 注入环境变量 —— 代理
-export _CAC_PROXY="$PROXY"
-export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
-export NO_PROXY="localhost,127.0.0.1"
+# 注入环境变量 —— 代理（仅在配置了代理时注入）
+if [[ -n "$PROXY" ]]; then
+    export _CAC_PROXY="$PROXY"
+    export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
+    export NO_PROXY="localhost,127.0.0.1"
+fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── 多层环境变量遥测保护 ──
@@ -772,10 +776,16 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export TELEMETRY_DISABLED=1
 export DISABLE_TELEMETRY=1
 
-# 清除第三方 API 配置，强制走 OAuth 官方端点
-unset ANTHROPIC_BASE_URL
-unset ANTHROPIC_AUTH_TOKEN
-unset ANTHROPIC_API_KEY
+# 无代理模式：保留用户自定义的 API 端点配置（第三方中转）
+# 有代理模式：清除第三方 API 配置，强制走 OAuth 官方端点
+if [[ -z "$PROXY" ]]; then
+    # 无代理：允许 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY 透传
+    true
+else
+    unset ANTHROPIC_BASE_URL
+    unset ANTHROPIC_AUTH_TOKEN
+    unset ANTHROPIC_API_KEY
+fi
 
 # ── NS 层级 DNS 拦截 ──
 if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
@@ -825,12 +835,13 @@ _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 # Claude Code 启动时健康检查直连 api.anthropic.com，在代理环境下会挂起。
 # 解决：本地 HTTPS server (端口 443) + /etc/hosts 劫持，让健康检查秒过 200。
 # 需要 root 权限（Docker 中默认满足）。健康检查完成后自动清理。
+# 无代理模式下跳过（第三方中转直连不受 Cloudflare TLS 拒绝影响）。
 _hb_cert="$CAC_DIR/ca/hb_cert.pem"
 _hb_key="$CAC_DIR/ca/hb_key.pem"
 _hb_pid=""
 
-# 健康检查 bypass（允许失败，不影响主流程）
-if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
+# 健康检查 bypass（允许失败，不影响主流程；无代理模式跳过）
+if [[ -n "$PROXY" ]] && [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     (
         node -e "
         var h=require('https'),f=require('fs');
@@ -852,9 +863,9 @@ if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     sleep 0.8
 fi
 
-# ── Relay 本地中转（绕过 TUN）──
+# ── Relay 本地中转（绕过 TUN）——仅在有代理时使用 ──
 _relay_active=false
-if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
@@ -1105,8 +1116,10 @@ cmd_setup() {
         echo "   source $rc_file"
     fi
     echo
-    echo "2. 添加第一个代理环境："
-    echo "   cac add <名字> <host:port:user:pass>"
+    echo "2. 添加第一个环境（二选一）："
+    echo "   有代理：cac add <名字> <host:port:user:pass>"
+    echo "   无代理：cac add <名字>                      # 仅指纹隔离，配合第三方中转使用"
+    echo "   切换：  cac <名字>"
 }
 
 # ━━━ cmd_env.sh ━━━
@@ -1114,13 +1127,14 @@ cmd_setup() {
 
 cmd_add() {
     _require_setup
-    if [[ $# -lt 2 ]]; then
-        echo "用法：cac add <名字> <host:port:user:pass>" >&2
+    if [[ $# -lt 1 ]]; then
+        echo "用法：cac add <名字> [host:port:user:pass]" >&2
         echo "示例：cac add us1 1.2.3.4:1080:username:password" >&2
+        echo "      cac add local                              # 无代理（第三方中转 / 仅指纹隔离）" >&2
         exit 1
     fi
 
-    local name="$1" raw_proxy="$2"
+    local name="$1" raw_proxy="${2:-}"
     local env_dir="$ENVS_DIR/$name"
 
     if [[ -d "$env_dir" ]]; then
@@ -1128,35 +1142,49 @@ cmd_add() {
         exit 1
     fi
 
-    local proxy
-    # 如果用户未指定协议，自动探测 http/socks5/https
-    if [[ ! "$raw_proxy" =~ ^(http|https|socks5):// ]]; then
-        printf "  自动检测代理协议 ... "
-        if proxy=$(_auto_detect_proxy "$raw_proxy"); then
-            echo "$(_green "$(echo "$proxy" | grep -oE '^[a-z]+')://")"
+    local proxy=""
+    local noproxy_mode=false
+
+    if [[ -z "$raw_proxy" ]]; then
+        # 无代理模式：仅做指纹隔离，不注入代理
+        noproxy_mode=true
+        echo "即将创建环境：$(_bold "$name") $(_yellow "[无代理模式]")"
+        echo "  说明：仅启用硬件指纹隔离，不注入代理（适合使用第三方中转或自配代理）"
+        echo
+    else
+        # 如果用户未指定协议，自动探测 http/socks5/https
+        if [[ ! "$raw_proxy" =~ ^(http|https|socks5):// ]]; then
+            printf "  自动检测代理协议 ... "
+            if proxy=$(_auto_detect_proxy "$raw_proxy"); then
+                echo "$(_green "$(echo "$proxy" | grep -oE '^[a-z]+')://")"
+            else
+                echo "$(_yellow "检测失败，使用默认 http://")"
+            fi
         else
-            echo "$(_yellow "检测失败，使用默认 http://")"
+            proxy=$(_parse_proxy "$raw_proxy")
         fi
-    else
-        proxy=$(_parse_proxy "$raw_proxy")
-    fi
 
-    echo "即将创建环境：$(_bold "$name")"
-    echo "  代理：$proxy"
-    echo
+        echo "即将创建环境：$(_bold "$name")"
+        echo "  代理：$proxy"
+        echo
 
-    printf "  检测代理 ... "
-    if _proxy_reachable "$proxy"; then
-        echo "$(_green "✓ 可达")"
-    else
-        echo "$(_red "✗ 不通")"
-        echo "  警告：代理当前不可达（代理客户端可能未启动）"
+        printf "  检测代理 ... "
+        if _proxy_reachable "$proxy"; then
+            echo "$(_green "✓ 可达")"
+        else
+            echo "$(_red "✗ 不通")"
+            echo "  警告：代理当前不可达（代理客户端可能未启动）"
+        fi
     fi
 
     # 自动检测出口 IP 的时区和语言
     printf "  检测时区 ... "
     local exit_ip tz lang
-    exit_ip=$(curl -s --proxy "$proxy" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+    if [[ "$noproxy_mode" == "true" ]]; then
+        exit_ip=$(curl -s --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+    else
+        exit_ip=$(curl -s --proxy "$proxy" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+    fi
     if [[ -n "$exit_ip" ]]; then
         local ip_info
         ip_info=$(curl -s --connect-timeout 8 "http://ip-api.com/json/${exit_ip}?fields=timezone,countryCode" 2>/dev/null || true)
@@ -1177,7 +1205,7 @@ cmd_add() {
     [[ "$confirm" == "yes" ]] || { echo "已取消。"; exit 0; }
 
     mkdir -p "$env_dir"
-    echo "$proxy"            > "$env_dir/proxy"
+    echo "$proxy"            > "$env_dir/proxy"   # 无代理模式时为空字符串
     echo "$(_new_uuid)"      > "$env_dir/uuid"
     echo "$(_new_sid)"       > "$env_dir/stable_id"
     echo "$(_new_user_id)"   > "$env_dir/user_id"
@@ -1213,12 +1241,16 @@ cmd_switch() {
 
     local proxy; proxy=$(_read "$ENVS_DIR/$name/proxy")
 
-    printf "检测 [%s] 代理 ... " "$name"
-    if _proxy_reachable "$proxy"; then
-        echo "$(_green "✓ 可达")"
+    if [[ -z "$proxy" ]]; then
+        echo "$(_yellow "[无代理模式]") 指纹隔离已启用，不注入代理"
     else
-        echo "$(_yellow "⚠ 不通")"
-        echo "警告：代理不可达，仍切换（启动 claude 时会拦截）"
+        printf "检测 [%s] 代理 ... " "$name"
+        if _proxy_reachable "$proxy"; then
+            echo "$(_green "✓ 可达")"
+        else
+            echo "$(_yellow "⚠ 不通")"
+            echo "警告：代理不可达，仍切换（启动时会拦截）"
+        fi
     fi
 
     echo "$name" > "$CAC_DIR/current"
@@ -1257,12 +1289,13 @@ cmd_ls() {
     for env_dir in "$ENVS_DIR"/*/; do
         local name; name=$(basename "$env_dir")
         local proxy; proxy=$(_read "$env_dir/proxy" "（未配置）")
+        local proxy_display="${proxy:-$(_yellow "[无代理]")}"
         if [[ "$name" == "$current" ]]; then
             printf "  %s %s%s\n" "$(_green "▶")" "$(_bold "$name")" "$stopped_tag"
-            printf "    %s\n" "$proxy"
+            printf "    %s\n" "$proxy_display"
         else
             printf "    %s\n" "$name"
-            printf "    %s\n" "$proxy"
+            printf "    %s\n" "$proxy_display"
         fi
     done
 }
@@ -1585,7 +1618,11 @@ cmd_check() {
     local proxy; proxy=$(_read "$env_dir/proxy")
 
     echo "当前环境：$(_bold "$current")"
-    echo "  代理      ：$proxy"
+    if [[ -z "$proxy" ]]; then
+        echo "  代理      ：$(_yellow "[无代理模式]")（指纹隔离已启用，API 端点由环境变量决定）"
+    else
+        echo "  代理      ：$proxy"
+    fi
     echo "  UUID      ：$(_read "$env_dir/uuid")"
     echo "  stable_id ：$(_read "$env_dir/stable_id")"
     echo "  user_id   ：$(_read "$env_dir/user_id" "（旧环境，无此字段）")"
@@ -1594,31 +1631,38 @@ cmd_check() {
     echo
 
     # ── 网络连通性 ──
-    printf "  TCP 连通  ... "
-    if ! _proxy_reachable "$proxy"; then
-        echo "$(_red "✗ 不通")"; return
-    fi
-    echo "$(_green "✓")"
-
-    printf "  出口 IP   ... "
-    local proxy_ip
-    proxy_ip=$(curl -s --proxy "$proxy" \
-         --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$proxy_ip" ]]; then
-        echo "$(_green "$proxy_ip")"
+    if [[ -z "$proxy" ]]; then
+        echo "  $(_yellow "⚠") 无代理模式，跳过代理连通性检测"
+        echo "  $(_yellow "⚠") 请确保已通过 ANTHROPIC_BASE_URL 配置第三方中转端点"
     else
-        echo "$(_yellow "获取失败")"
-    fi
+        printf "  TCP 连通  ... "
+        if ! _proxy_reachable "$proxy"; then
+            echo "$(_red "✗ 不通")"; return
+        fi
+        echo "$(_green "✓")"
 
-    # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
-    echo
-    echo "── 冲突检测 ────────────────────────────────────────────"
-    printf "  代理冲突  ... "
-    _check_proxy_conflict "$proxy" "$proxy_ip"
+        printf "  出口 IP   ... "
+        local proxy_ip
+        proxy_ip=$(curl -s --proxy "$proxy" \
+             --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+        if [[ -n "$proxy_ip" ]]; then
+            echo "$(_green "$proxy_ip")"
+        else
+            echo "$(_yellow "获取失败")"
+        fi
+
+        # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
+        echo
+        echo "── 冲突检测 ────────────────────────────────────────────"
+        printf "  代理冲突  ... "
+        _check_proxy_conflict "$proxy" "$proxy_ip"
+    fi
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"
-    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
+    if [[ -z "$proxy" ]]; then
+        echo "  Relay 模式 ... $(_yellow "无代理模式，不适用")"
+    elif [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
         if _relay_is_running; then
             local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
@@ -2286,19 +2330,26 @@ $(_bold "cac") — Claude Anti-fingerprint Cloak
 
 $(_bold "用法：")
   cac setup                         首次安装（自动配置 PATH）
-  cac add <名字> <host:port:u:p>    添加新环境（需要 yes 确认）
+  cac add <名字> [host:port:u:p]   添加新环境（代理可选，需要 yes 确认）
   cac <名字>                        切换到指定环境
   cac ls                            列出所有环境
   cac check                         核查当前环境（代理 + 安全防护）
   cac relay [on|off|status]          本地中转（绕过 TUN）
-  cac stop                          临时停用，claude 裸跑
+  cac stop                          临时停用，裸跑
   cac -c                            恢复停用
   cac delete                        卸载 cac（清除所有数据和配置）
   cac -v                            查看版本号和安装方式
 
-$(_bold "代理格式：")
-  host:port:user:pass    带认证的 SOCKS5
-  host:port              无认证的 SOCKS5
+$(_bold "代理格式（可选）：")
+  host:port:user:pass    带认证的代理
+  host:port              无认证的代理
+  （不填）               无代理模式（仅指纹隔离，配合第三方中转使用）
+
+$(_bold "无代理模式（第三方中转）：")
+  cac add <名字>                    不传代理，仅启用硬件指纹隔离
+  # 然后在启动前设置：
+  export ANTHROPIC_BASE_URL=https://your-relay.example.com
+  export ANTHROPIC_API_KEY=sk-ant-xxxxx
 
 $(_bold "Relay 中转：")
   cac relay on              启用本地中转（绕过 TUN/Clash 等代理冲突）
@@ -2324,6 +2375,7 @@ $(_bold "Docker 容器模式：")
 
 $(_bold "示例：")
   cac add us1 1.2.3.4:1080:username:password
+  cac add local                              # 无代理模式（第三方中转）
   cac us1
   cac check
   cac stop

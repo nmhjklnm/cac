@@ -6,19 +6,26 @@ $(_bold "cac") — Claude Anti-fingerprint Cloak
 
 $(_bold "用法：")
   cac setup                         首次安装（自动配置 PATH）
-  cac add <名字> <host:port:u:p>    添加新环境（需要 yes 确认）
+  cac add <名字> [host:port:u:p]   添加新环境（代理可选，需要 yes 确认）
   cac <名字>                        切换到指定环境
   cac ls                            列出所有环境
   cac check                         核查当前环境（代理 + 安全防护）
   cac relay [on|off|status]          本地中转（绕过 TUN）
-  cac stop                          临时停用，claude 裸跑
+  cac stop                          临时停用，裸跑
   cac -c                            恢复停用
   cac delete                        卸载 cac（清除所有数据和配置）
   cac -v                            查看版本号和安装方式
 
-$(_bold "代理格式：")
-  host:port:user:pass    带认证的 SOCKS5
-  host:port              无认证的 SOCKS5
+$(_bold "代理格式（可选）：")
+  host:port:user:pass    带认证的代理
+  host:port              无认证的代理
+  （不填）               无代理模式（仅指纹隔离，配合第三方中转使用）
+
+$(_bold "无代理模式（第三方中转）：")
+  cac add <名字>                    不传代理，仅启用硬件指纹隔离
+  # 然后在启动前设置：
+  export ANTHROPIC_BASE_URL=https://your-relay.example.com
+  export ANTHROPIC_API_KEY=sk-ant-xxxxx
 
 $(_bold "Relay 中转：")
   cac relay on              启用本地中转（绕过 TUN/Clash 等代理冲突）
@@ -44,6 +51,7 @@ $(_bold "Docker 容器模式：")
 
 $(_bold "示例：")
   cac add us1 1.2.3.4:1080:username:password
+  cac add local                              # 无代理模式（第三方中转）
   cac us1
   cac check
   cac stop

@@ -82,6 +82,8 @@ cmd_setup() {
         echo "   source $rc_file"
     fi
     echo
-    echo "2. 添加第一个代理环境："
-    echo "   cac add <名字> <host:port:user:pass>"
+    echo "2. 添加第一个环境（二选一）："
+    echo "   有代理：cac add <名字> <host:port:user:pass>"
+    echo "   无代理：cac add <名字>                      # 仅指纹隔离，配合第三方中转使用"
+    echo "   切换：  cac <名字>"
 }

@@ -24,16 +24,18 @@ _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] 错误：环境 '$_name' 不存在" >&2; exit 1; }
 
-PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+PROXY=$(cat "$_env_dir/proxy" 2>/dev/null | tr -d '[:space:]' || true)
 
-# pre-flight：代理连通性（纯 bash，无 fork）
-_hp="${PROXY##*@}"; _hp="${_hp##*://}"
-_host="${_hp%%:*}"
-_port="${_hp##*:}"
-if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
-    echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
-    echo "[cac] 提示：运行 'cac check' 排查，或 'cacstop' 临时停用" >&2
-    exit 1
+# pre-flight：代理连通性（纯 bash，无 fork）—— 仅在配置了代理时执行
+if [[ -n "$PROXY" ]]; then
+    _hp="${PROXY##*@}"; _hp="${_hp##*://}"
+    _host="${_hp%%:*}"
+    _port="${_hp##*:}"
+    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+        echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
+        echo "[cac] 提示：运行 'cac check' 排查，或 'cacstop' 临时停用" >&2
+        exit 1
+    fi
 fi
 
 # 注入 statsig stable_id
@@ -44,10 +46,12 @@ if [[ -f "$_env_dir/stable_id" ]]; then
     done
 fi
 
-# 注入环境变量 —— 代理
-export _CAC_PROXY="$PROXY"
-export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
-export NO_PROXY="localhost,127.0.0.1"
+# 注入环境变量 —— 代理（仅在配置了代理时注入）
+if [[ -n "$PROXY" ]]; then
+    export _CAC_PROXY="$PROXY"
+    export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
+    export NO_PROXY="localhost,127.0.0.1"
+fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── 多层环境变量遥测保护 ──
@@ -70,10 +74,16 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export TELEMETRY_DISABLED=1
 export DISABLE_TELEMETRY=1
 
-# 清除第三方 API 配置，强制走 OAuth 官方端点
-unset ANTHROPIC_BASE_URL
-unset ANTHROPIC_AUTH_TOKEN
-unset ANTHROPIC_API_KEY
+# 无代理模式：保留用户自定义的 API 端点配置（第三方中转）
+# 有代理模式：清除第三方 API 配置，强制走 OAuth 官方端点
+if [[ -z "$PROXY" ]]; then
+    # 无代理：允许 ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY 透传
+    true
+else
+    unset ANTHROPIC_BASE_URL
+    unset ANTHROPIC_AUTH_TOKEN
+    unset ANTHROPIC_API_KEY
+fi
 
 # ── NS 层级 DNS 拦截 ──
 if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
@@ -123,12 +133,13 @@ _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 # Claude Code 启动时健康检查直连 api.anthropic.com，在代理环境下会挂起。
 # 解决：本地 HTTPS server (端口 443) + /etc/hosts 劫持，让健康检查秒过 200。
 # 需要 root 权限（Docker 中默认满足）。健康检查完成后自动清理。
+# 无代理模式下跳过（第三方中转直连不受 Cloudflare TLS 拒绝影响）。
 _hb_cert="$CAC_DIR/ca/hb_cert.pem"
 _hb_key="$CAC_DIR/ca/hb_key.pem"
 _hb_pid=""
 
-# 健康检查 bypass（允许失败，不影响主流程）
-if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
+# 健康检查 bypass（允许失败，不影响主流程；无代理模式跳过）
+if [[ -n "$PROXY" ]] && [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     (
         node -e "
         var h=require('https'),f=require('fs');
@@ -150,9 +161,9 @@ if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     sleep 0.8
 fi
 
-# ── Relay 本地中转（绕过 TUN）──
+# ── Relay 本地中转（绕过 TUN）——仅在有代理时使用 ──
 _relay_active=false
-if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"

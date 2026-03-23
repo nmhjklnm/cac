@@ -102,7 +102,11 @@ cmd_check() {
     local proxy; proxy=$(_read "$env_dir/proxy")
 
     echo "当前环境：$(_bold "$current")"
-    echo "  代理      ：$proxy"
+    if [[ -z "$proxy" ]]; then
+        echo "  代理      ：$(_yellow "[无代理模式]")（指纹隔离已启用，API 端点由环境变量决定）"
+    else
+        echo "  代理      ：$proxy"
+    fi
     echo "  UUID      ：$(_read "$env_dir/uuid")"
     echo "  stable_id ：$(_read "$env_dir/stable_id")"
     echo "  user_id   ：$(_read "$env_dir/user_id" "（旧环境，无此字段）")"
@@ -111,31 +115,38 @@ cmd_check() {
     echo
 
     # ── 网络连通性 ──
-    printf "  TCP 连通  ... "
-    if ! _proxy_reachable "$proxy"; then
-        echo "$(_red "✗ 不通")"; return
-    fi
-    echo "$(_green "✓")"
-
-    printf "  出口 IP   ... "
-    local proxy_ip
-    proxy_ip=$(curl -s --proxy "$proxy" \
-         --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$proxy_ip" ]]; then
-        echo "$(_green "$proxy_ip")"
+    if [[ -z "$proxy" ]]; then
+        echo "  $(_yellow "⚠") 无代理模式，跳过代理连通性检测"
+        echo "  $(_yellow "⚠") 请确保已通过 ANTHROPIC_BASE_URL 配置第三方中转端点"
     else
-        echo "$(_yellow "获取失败")"
-    fi
+        printf "  TCP 连通  ... "
+        if ! _proxy_reachable "$proxy"; then
+            echo "$(_red "✗ 不通")"; return
+        fi
+        echo "$(_green "✓")"
 
-    # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
-    echo
-    echo "── 冲突检测 ────────────────────────────────────────────"
-    printf "  代理冲突  ... "
-    _check_proxy_conflict "$proxy" "$proxy_ip"
+        printf "  出口 IP   ... "
+        local proxy_ip
+        proxy_ip=$(curl -s --proxy "$proxy" \
+             --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+        if [[ -n "$proxy_ip" ]]; then
+            echo "$(_green "$proxy_ip")"
+        else
+            echo "$(_yellow "获取失败")"
+        fi
+
+        # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
+        echo
+        echo "── 冲突检测 ────────────────────────────────────────────"
+        printf "  代理冲突  ... "
+        _check_proxy_conflict "$proxy" "$proxy_ip"
+    fi
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"
-    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
+    if [[ -z "$proxy" ]]; then
+        echo "  Relay 模式 ... $(_yellow "无代理模式，不适用")"
+    elif [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
         printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
         if _relay_is_running; then
             local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
