@@ -1,0 +1,24 @@
+FROM node:18-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash curl netcat-openbsd procps iproute2 uuid-runtime python3 grep \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/cac
+
+# Copy project files
+COPY src/ src/
+COPY build.sh .
+COPY package.json .
+
+# Build cac
+RUN bash build.sh
+
+# Copy test script
+COPY test-relay-docker.sh /opt/test-relay-docker.sh
+RUN chmod +x /opt/test-relay-docker.sh
+
+# Add cac to PATH
+ENV PATH="/opt/cac:$PATH"
+
+CMD ["bash", "/opt/test-relay-docker.sh"]

@@ -65,6 +65,11 @@ cmd_setup() {
     _generate_ca_cert
     echo "  ✓ mTLS CA → $CAC_DIR/ca/ca_cert.pem"
 
+    # 健康检查 bypass 证书
+    if _generate_health_bypass_cert; then
+        echo "  ✓ health bypass cert → $CAC_DIR/ca/hb_cert.pem"
+    fi
+
     # 自动写入 PATH 到 shell rc 文件
     local rc_file
     rc_file=$(_detect_rc_file)

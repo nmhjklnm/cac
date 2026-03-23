@@ -260,6 +260,27 @@ if (mtlsCert && mtlsKey) {
         };
     }
 })();
+
+
+// ─── 4. 健康检查走 NO_PROXY（直连本地 server）─────────────────
+// wrapper 启动本地 HTTPS server + /etc/hosts，并将 api.anthropic.com
+// 加入 NO_PROXY，让健康检查绕过代理走直连 → 本地 server → 200。
+// 3 秒后从 NO_PROXY 中移除，让后续 API 调用走代理。
+
+(function healthCheckNoProxy() {
+    if (!process.env._CAC_PROXY) return;
+
+    // 将健康检查域名加入 NO_PROXY
+    var noProxy = process.env.NO_PROXY || '';
+    process.env.NO_PROXY = noProxy + ',api.anthropic.com';
+    if (process.env.no_proxy) process.env.no_proxy = process.env.no_proxy + ',api.anthropic.com';
+
+    // 3 秒后移除（健康检查已完成，后续 API 调用需要走代理）
+    setTimeout(function() {
+        process.env.NO_PROXY = noProxy;
+        if (process.env.no_proxy) process.env.no_proxy = (process.env.no_proxy || '').replace(',api.anthropic.com', '');
+    }, 3000);
+})();
 DNSGUARD_EOF
     chmod 644 "$guard_file"
 }

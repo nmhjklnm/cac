@@ -45,6 +45,7 @@ if [[ -f "$_env_dir/stable_id" ]]; then
 fi
 
 # 注入环境变量 —— 代理
+export _CAC_PROXY="$PROXY"
 export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
 export NO_PROXY="localhost,127.0.0.1"
 export PATH="$CAC_DIR/shim-bin:$PATH"
@@ -95,6 +96,9 @@ if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; 
     export CAC_PROXY_HOST="$_hp"
 fi
 
+# 确保 CA 证书始终被信任（健康检查 bypass 和 mTLS 都需要）
+[[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
+
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
 [[ -f "$_env_dir/hostname" ]] && export HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
@@ -114,6 +118,37 @@ fi
 # 执行真实 claude
 _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 [[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }
+
+# ── 健康检查 bypass ──
+# Claude Code 启动时健康检查直连 api.anthropic.com，在代理环境下会挂起。
+# 解决：本地 HTTPS server (端口 443) + /etc/hosts 劫持，让健康检查秒过 200。
+# 需要 root 权限（Docker 中默认满足）。健康检查完成后自动清理。
+_hb_cert="$CAC_DIR/ca/hb_cert.pem"
+_hb_key="$CAC_DIR/ca/hb_key.pem"
+_hb_pid=""
+
+# 健康检查 bypass（允许失败，不影响主流程）
+if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
+    (
+        node -e "
+        var h=require('https'),f=require('fs');
+        h.createServer({cert:f.readFileSync('$_hb_cert'),key:f.readFileSync('$_hb_key')},
+        function(q,r){r.writeHead(200,{'Content-Type':'application/json'});r.end('{\"message\":\"hello\"}')})
+        .listen(443,'127.0.0.1');
+        setTimeout(function(){process.exit()},5000);
+        " </dev/null >/dev/null 2>&1 &
+        _hb_pid=$!
+        sleep 0.5
+        echo "127.0.0.1 api.anthropic.com #cac-health-bypass" >> /etc/hosts 2>/dev/null || true
+        # 3 秒后自动清理（健康检查在 1-2 秒内完成）
+        sleep 3
+        grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
+        rm -f /tmp/_hosts_clean
+        kill "$_hb_pid" 2>/dev/null || true
+    ) &
+    _hb_cleanup_pid=$!
+    sleep 0.8
+fi
 
 # ── Relay 本地中转（绕过 TUN）──
 _relay_active=false
@@ -155,21 +190,27 @@ if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" =
     fi
 fi
 
-# relay 模式下不能 exec（需保留进程做清理）
-if [[ "$_relay_active" == "true" ]]; then
-    _cleanup_relay() {
+# 清理函数
+_cleanup_all() {
+    # 清理 health bypass 子进程
+    [[ -n "${_hb_cleanup_pid:-}" ]] && kill "$_hb_cleanup_pid" 2>/dev/null || true
+    grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
+    rm -f /tmp/_hosts_clean
+    # 杀掉残留的 node hello server
+    pkill -f "listen(443" 2>/dev/null || true
+    # 清理 relay
+    if [[ "$_relay_active" == "true" ]]; then
         local _p; _p=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
         [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
         rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
-    }
-    trap _cleanup_relay EXIT INT TERM
-    "$_real" "$@"
-    _ec=$?
-    _cleanup_relay
-    exit "$_ec"
-else
-    exec "$_real" "$@"
-fi
+    fi
+}
+
+trap _cleanup_all EXIT INT TERM
+"$_real" "$@"
+_ec=$?
+_cleanup_all
+exit "$_ec"
 WRAPPER_EOF
     chmod +x "$CAC_DIR/bin/claude"
 }
