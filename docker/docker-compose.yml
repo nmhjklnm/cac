@@ -16,7 +16,9 @@ services:
       DISABLE_IPV6: ${DISABLE_IPV6:-1}
       HEALTHCHECK: ${HEALTHCHECK:-1}
     volumes:
-      - cac-home:/root
+      - ${CAC_DATA:-./data}/root:/root
+      - ${CAC_DATA:-./data}/home:/home
+    working_dir: /home
     stdin_open: true
     tty: true
     restart: unless-stopped
@@ -26,6 +28,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-
-volumes:
-  cac-home:

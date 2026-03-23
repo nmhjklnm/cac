@@ -286,6 +286,11 @@ _dk_cmd_setup() {
   fi
 
   echo ""
+  # Create persistent data directory
+  local docker_dir
+  docker_dir=$(_docker_dir)
+  mkdir -p "${docker_dir}/data/root" "${docker_dir}/data/home"
+
   _ok "Config saved"
   echo ""
   _info "Next: \033[1mcac docker create\033[0m"
