@@ -98,8 +98,14 @@ function makeFakeChildProcess() {
   cp.stdout = new EventEmitter();
   cp.stderr = new EventEmitter();
   cp.stdin = null;
+  cp.stdio = [null, cp.stdout, cp.stderr];
   cp.pid = 0;
-  cp.kill = () => {};
+  cp.exitCode = null;
+  cp.signalCode = null;
+  cp.killed = false;
+  cp.spawnargs = [];
+  cp.spawnfile = '';
+  cp.kill = () => false;
   return cp;
 }
 
