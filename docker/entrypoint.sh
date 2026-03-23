@@ -64,52 +64,49 @@ if [[ "$SINGBOX_ENABLE" == "1" ]]; then
     cac setup 2>/dev/null || true
   fi
 
-  # Create and activate profile if not exists
-  local_env_dir="$ENVS_DIR/$CAC_PROFILE"
-  if [[ ! -d "$local_env_dir" ]]; then
+  # Create and activate profile if not complete
+  _env_dir="$ENVS_DIR/$CAC_PROFILE"
+  if [[ ! -f "$_env_dir/uuid" ]]; then
     echo "Creating cac profile: $CAC_PROFILE"
-    mkdir -p "$local_env_dir"
+    mkdir -p "$_env_dir"
 
-    # Proxy: TUN handles networking, but cac wrapper still needs a proxy entry
-    # Use PROXY_URI so cac check doesn't complain
-    local _proxy_for_cac=""
+    _proxy_for_cac=""
     if [[ -n "${PROXY_URI:-}" ]] && [[ "$PROXY_URI" != *"://"* ]]; then
-      # Compact format → build socks5:// URL
       IFS=: read -r _h _p _u _pw <<< "$PROXY_URI"
       _proxy_for_cac="socks5://${_u:+$_u:$_pw@}$_h:$_p"
     elif [[ -n "${PROXY_URI:-}" ]]; then
       _proxy_for_cac="$PROXY_URI"
     fi
-    echo "${_proxy_for_cac:-none}" > "$local_env_dir/proxy"
+    echo "${_proxy_for_cac:-none}" > "$_env_dir/proxy"
 
     # Generate identity
-    uuidgen | tr '[:lower:]' '[:upper:]'           > "$local_env_dir/uuid"
-    uuidgen | tr '[:upper:]' '[:lower:]'           > "$local_env_dir/stable_id"
-    python3 -c "import os; print(os.urandom(32).hex())" > "$local_env_dir/user_id"
-    uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'    > "$local_env_dir/machine_id"
-    echo "host-$(uuidgen | cut -d- -f1 | tr '[:upper:]' '[:lower:]')" > "$local_env_dir/hostname"
-    printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) > "$local_env_dir/mac_address"
+    uuidgen | tr '[:lower:]' '[:upper:]'           > "$_env_dir/uuid"
+    uuidgen | tr '[:upper:]' '[:lower:]'           > "$_env_dir/stable_id"
+    python3 -c "import os; print(os.urandom(32).hex())" > "$_env_dir/user_id"
+    uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'    > "$_env_dir/machine_id"
+    echo "host-$(uuidgen | cut -d- -f1 | tr '[:upper:]' '[:lower:]')" > "$_env_dir/hostname"
+    printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) > "$_env_dir/mac_address"
 
     # Timezone and language from geo detection
-    echo "${_GEO_TZ:-America/New_York}"     > "$local_env_dir/tz"
-    echo "${_GEO_LANG:-en_US.UTF-8}"        > "$local_env_dir/lang"
+    echo "${_GEO_TZ:-America/New_York}"     > "$_env_dir/tz"
+    echo "${_GEO_LANG:-en_US.UTF-8}"        > "$_env_dir/lang"
 
     # Generate mTLS client certificate
     if [[ -f "$CAC_DIR/ca/ca_key.pem" ]]; then
-      openssl genrsa -out "$local_env_dir/client_key.pem" 2048 2>/dev/null
-      openssl req -new -key "$local_env_dir/client_key.pem" \
+      openssl genrsa -out "$_env_dir/client_key.pem" 2048 2>/dev/null
+      openssl req -new -key "$_env_dir/client_key.pem" \
         -subj "/CN=cac-client-${CAC_PROFILE}" \
         -out /tmp/cac-csr.pem 2>/dev/null
       openssl x509 -req -in /tmp/cac-csr.pem \
         -CA "$CAC_DIR/ca/ca_cert.pem" -CAkey "$CAC_DIR/ca/ca_key.pem" \
         -CAcreateserial -days 365 \
-        -out "$local_env_dir/client_cert.pem" 2>/dev/null
+        -out "$_env_dir/client_cert.pem" 2>/dev/null
       rm -f /tmp/cac-csr.pem
     fi
 
     echo "  Profile: $CAC_PROFILE"
-    echo "  Hostname: $(cat "$local_env_dir/hostname")"
-    echo "  UUID: $(cat "$local_env_dir/uuid")"
+    echo "  Hostname: $(cat "$_env_dir/hostname")"
+    echo "  UUID: $(cat "$_env_dir/uuid")"
   fi
 
   # Activate profile
@@ -117,9 +114,9 @@ if [[ "$SINGBOX_ENABLE" == "1" ]]; then
   rm -f "$CAC_DIR/stopped"
 
   # Export identity env vars for current session (so cac-check sees them)
-  export CAC_HOSTNAME="$(cat "$local_env_dir/hostname" 2>/dev/null)"
-  export CAC_MAC="$(cat "$local_env_dir/mac_address" 2>/dev/null)"
-  export CAC_MACHINE_ID="$(cat "$local_env_dir/machine_id" 2>/dev/null)"
+  export CAC_HOSTNAME="$(cat "$_env_dir/hostname" 2>/dev/null)"
+  export CAC_MAC="$(cat "$_env_dir/mac_address" 2>/dev/null)"
+  export CAC_MACHINE_ID="$(cat "$_env_dir/machine_id" 2>/dev/null)"
   export CAC_USERNAME="cac-user"
 
   # Persist for interactive shells
