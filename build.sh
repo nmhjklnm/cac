@@ -17,6 +17,7 @@ SOURCES=(
     cmd_relay.sh
     cmd_check.sh
     cmd_stop.sh
+    cmd_docker.sh
     cmd_delete.sh
     cmd_version.sh
     cmd_help.sh

@@ -32,11 +32,22 @@ $(_bold "安全防护：")
   多层环境变量保护       DO_NOT_TRACK / OTEL_SDK_DISABLED 等 12 层遥测阻断
   mTLS 客户端证书        自签 CA + 客户端证书 + https.globalAgent 注入
 
+$(_bold "Docker 容器模式：")
+  cac docker setup              配置代理 + 网络（交互式）
+  cac docker create             拉取 Docker 镜像
+  cac docker start              启动容器
+  cac docker enter              进入容器（claude + cac 可用）
+  cac docker check              网络 + 身份诊断
+  cac docker port <端口>         端口转发到 localhost
+  cac docker stop               停止容器
+  cac docker help               查看所有 docker 子命令
+
 $(_bold "示例：")
   cac add us1 1.2.3.4:1080:username:password
   cac us1
   cac check
   cac stop
+  cac docker setup && cac docker start && cac docker enter
 
 $(_bold "文件目录：")
   ~/.cac/bin/claude           wrapper（拦截所有 claude 调用）
