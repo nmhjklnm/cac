@@ -253,7 +253,12 @@ function handleConnect(clientSock, targetHost, targetPort, headerRest) {
 function handlePlainHttp(clientSock, firstLine, headerRest) {
   // For plain HTTP requests, forward directly to upstream proxy
   const sock = net.connect(upstreamPort, upstreamHost, () => {
-    sock.write(firstLine + '\r\n' + headerRest);
+    let authHeader = '';
+    if (upstreamUser) {
+      const cred = Buffer.from(upstreamUser + ':' + upstreamPass).toString('base64');
+      authHeader = 'Proxy-Authorization: Basic ' + cred + '\r\n';
+    }
+    sock.write(firstLine + '\r\n' + authHeader + headerRest);
     clientSock.pipe(sock);
     sock.pipe(clientSock);
   });
