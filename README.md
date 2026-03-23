@@ -90,6 +90,8 @@ rm -f ~/bin/cac                  # 删除命令（bash 安装）
 # 添加配置
 cac add us1 1.2.3.4:1080:username:password
 cac add us2 "socks5://username:password@1.2.3.4:1080"
+cac add us3 "http://127.0.0.1:7890"
+cac add us4 "socks5://127.0.0.1:7891"
 
 # 切换配置
 cac us1
@@ -238,6 +240,9 @@ rm -f ~/bin/cac                  # remove command (bash install)
 
 ```bash
 cac add us1 1.2.3.4:1080:username:password
+cac add us2 "socks5://username:password@1.2.3.4:1080"
+cac add us3 "http://127.0.0.1:7890"
+cac add us4 "socks5://127.0.0.1:7891"
 cac us1
 cac check    # includes proxy conflict detection
 claude
