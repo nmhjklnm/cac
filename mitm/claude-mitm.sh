@@ -125,7 +125,8 @@ PROXY_FILE="$ENV_DIR/proxy"
 REMOTE_PROXY_URL="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip())' "$PROXY_FILE")"
 [[ -n "$REMOTE_PROXY_URL" ]] || die "代理配置为空：$PROXY_FILE"
 
-eval "$(parse_proxy_to_env "$REMOTE_PROXY_URL")"
+# Use process substitution instead of eval to avoid injection risks
+source <(parse_proxy_to_env "$REMOTE_PROXY_URL")
 
 LOCAL_PORT="${CAC_MITM_PORT:-8080}"
 [[ "$LOCAL_PORT" =~ ^[0-9]+$ ]] || die "CAC_MITM_PORT 必须是数字，当前值：$LOCAL_PORT"

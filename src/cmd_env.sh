@@ -20,8 +20,7 @@ cmd_add() {
     # 如果用户未指定协议，自动探测 http/socks5/https
     if [[ ! "$raw_proxy" =~ ^(http|https|socks5):// ]]; then
         printf "  自动检测代理协议 ... "
-        proxy=$(_auto_detect_proxy "$raw_proxy")
-        if [[ $? -eq 0 ]]; then
+        if proxy=$(_auto_detect_proxy "$raw_proxy"); then
             echo "$(_green "$(echo "$proxy" | grep -oE '^[a-z]+')://")"
         else
             echo "$(_yellow "检测失败，使用默认 http://")"
@@ -115,6 +114,18 @@ cmd_switch() {
 
     _update_statsig "$(_read "$ENVS_DIR/$name/stable_id")"
     _update_claude_json_user_id "$(_read "$ENVS_DIR/$name/user_id")"
+
+    # Relay 生命周期：切换环境时重启 relay
+    _relay_stop 2>/dev/null || true
+    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
+        printf "  启动 relay ... "
+        if _relay_start "$name"; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port")
+            echo "$(_green "✓") 127.0.0.1:$rport"
+        else
+            echo "$(_yellow "⚠ 启动失败，claude 启动时会重试")"
+        fi
+    fi
 
     echo "$(_green "✓") 已切换到 $(_bold "$name")"
 }

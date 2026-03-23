@@ -4,3 +4,7 @@ node_modules/
 *.swp
 *.swo
 *~
+
+# build artifacts
+fingerprint-hook.js
+relay.js

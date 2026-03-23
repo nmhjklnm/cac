@@ -92,6 +92,17 @@ if (fakeMachineId) {
 }
 
 // --- Windows: intercept child_process for wmic / reg queries ---
+function makeFakeChildProcess() {
+  const { EventEmitter } = require('events');
+  const cp = new EventEmitter();
+  cp.stdout = new EventEmitter();
+  cp.stderr = new EventEmitter();
+  cp.stdin = null;
+  cp.pid = 0;
+  cp.kill = () => {};
+  return cp;
+}
+
 if (process.platform === 'win32' && fakeMachineId) {
   const _origExecSync = child_process.execSync.bind(child_process);
   child_process.execSync = (cmd, options) => {
@@ -111,12 +122,11 @@ if (process.platform === 'win32' && fakeMachineId) {
     const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
     if (/wmic\s+csproduct\s+get\s+uuid/i.test(cmdStr)) {
       if (cb) process.nextTick(cb, null, `UUID\n${fakeMachineId}\n`, '');
-      // Return a mock ChildProcess-like object so callers don't crash
-      return _origExec('echo', () => {});
+      return makeFakeChildProcess();
     }
     if (/reg\s+query.*MachineGuid/i.test(cmdStr)) {
       if (cb) process.nextTick(cb, null, `    MachineGuid    REG_SZ    ${fakeMachineId}\n`, '');
-      return _origExec('echo', () => {});
+      return makeFakeChildProcess();
     }
     return _origExec(cmd, ...args);
   };
