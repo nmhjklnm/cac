@@ -3,10 +3,14 @@
 CAC_VERSION="1.0.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
+_die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
 _red()    { printf '\033[31m%s\033[0m' "$*"; }
 _yellow() { printf '\033[33m%s\033[0m' "$*"; }
+_cyan()   { printf '\033[36m%s\033[0m' "$*"; }
+_dim()    { printf '\033[2m%s\033[0m' "$*"; }
+_green_bold() { printf '\033[1;32m%s\033[0m' "$*"; }
 
 _detect_os() {
     case "$(uname -s)" in
@@ -109,10 +113,105 @@ _auto_detect_proxy() {
 _current_env()  { _read "$CAC_DIR/current"; }
 _env_dir()      { echo "$ENVS_DIR/$1"; }
 
+# ── Version management helpers ────────────────────────────────────
+
+_resolve_version() {
+    local v="$1"
+    if [[ "$v" == "latest" || -z "$v" ]]; then
+        _read "$VERSIONS_DIR/.latest" ""
+    else
+        echo "$v"
+    fi
+}
+
+_version_binary() {
+    echo "$VERSIONS_DIR/$1/claude"
+}
+
+_detect_platform() {
+    local os arch platform
+    case "$(uname -s)" in
+        Darwin) os="darwin" ;;
+        Linux)  os="linux" ;;
+        *) echo "unsupported" ; return 1 ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)   arch="x64" ;;
+        arm64|aarch64)  arch="arm64" ;;
+        *) echo "unsupported" ; return 1 ;;
+    esac
+    if [[ "$os" == "darwin" && "$arch" == "x64" ]]; then
+        [[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" == "1" ]] && arch="arm64"
+    fi
+    if [[ "$os" == "linux" ]]; then
+        if [ -f /lib/libc.musl-x86_64.so.1 ] || [ -f /lib/libc.musl-aarch64.so.1 ] || ldd /bin/ls 2>&1 | grep -q musl; then
+            platform="linux-${arch}-musl"
+        else
+            platform="linux-${arch}"
+        fi
+    else
+        platform="${os}-${arch}"
+    fi
+    echo "$platform"
+}
+
+_sha256() {
+    case "$(uname -s)" in
+        Darwin) shasum -a 256 "$1" | cut -d' ' -f1 ;;
+        *)      sha256sum "$1" | cut -d' ' -f1 ;;
+    esac
+}
+
+# Ensure a Claude Code version is installed (just-in-time, like uv)
+# Usage: _ensure_version_installed <version>
+# Resolves "latest", auto-downloads if missing, writes .latest
+_ensure_version_installed() {
+    local ver="$1"
+    ver=$(_resolve_version "$ver")
+    if [[ -z "$ver" ]]; then
+        printf "Fetching latest version ... " >&2
+        ver=$(_fetch_latest_version) || _die "failed to fetch latest version"
+        echo "$(_cyan "$ver")" >&2
+    fi
+    if [[ ! -x "$(_version_binary "$ver")" ]]; then
+        echo "Version $(_cyan "$ver") not installed, downloading ..." >&2
+        mkdir -p "$VERSIONS_DIR"
+        _download_version "$ver" || return 1
+        echo "$ver" > "$VERSIONS_DIR/.latest"
+        echo >&2
+    fi
+    echo "$ver"
+}
+
+# Count environments using a specific version
+_envs_using_version() {
+    local ver="$1" count=0
+    for env_dir in "$ENVS_DIR"/*/; do
+        [[ -d "$env_dir" ]] || continue
+        [[ "$(_read "$env_dir/version" "")" == "$ver" ]] && (( count++ )) || true
+    done
+    echo "$count"
+}
+
+# Elapsed time helper: call _timer_start, then _timer_elapsed
+_timer_start() { _TIMER_START=$(date +%s%N 2>/dev/null || date +%s); }
+_timer_elapsed() {
+    local now; now=$(date +%s%N 2>/dev/null || date +%s)
+    if [[ ${#now} -gt 10 ]]; then
+        # nanoseconds available
+        local ms=$(( (now - _TIMER_START) / 1000000 ))
+        if [[ $ms -ge 1000 ]]; then
+            printf '%d.%ds' $((ms/1000)) $(( (ms%1000)/100 ))
+        else
+            printf '%dms' "$ms"
+        fi
+    else
+        printf '%ds' $(( now - _TIMER_START ))
+    fi
+}
+
 _require_setup() {
-    [[ -f "$CAC_DIR/real_claude" ]] || {
-        echo "错误：请先运行 'cac setup'" >&2; exit 1
-    }
+    _ensure_initialized
 }
 
 _require_env() {
@@ -211,16 +310,20 @@ _remove_path_from_rc() {
 }
 
 _update_statsig() {
-    local statsig="$HOME/.claude/statsig"
+    local sid="$1"
+    local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local statsig="$config_dir/statsig"
     [[ -d "$statsig" ]] || return 0
     for f in "$statsig"/statsig.stable_id.*; do
-        [[ -f "$f" ]] && printf '"%s"' "$1" > "$f"
+        [[ -f "$f" ]] && printf '"%s"' "$sid" > "$f"
     done
 }
 
 _update_claude_json_user_id() {
     local user_id="$1"
-    local claude_json="$HOME/.claude.json"
+    local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local claude_json="$config_dir/.claude.json"
+    [[ -f "$claude_json" ]] || claude_json="$HOME/.claude.json"
     [[ -f "$claude_json" ]] || return 0
     python3 - "$claude_json" "$user_id" << 'PYEOF'
 import json, sys
@@ -231,5 +334,5 @@ d['userID'] = uid
 with open(fpath, 'w') as f:
     json.dump(d, f, indent=2, ensure_ascii=False)
 PYEOF
-    [[ $? -eq 0 ]] || echo "警告：更新 ~/.claude.json userID 失败" >&2
+    [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
 }

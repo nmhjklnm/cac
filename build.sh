@@ -17,6 +17,8 @@ SOURCES=(
     cmd_relay.sh
     cmd_check.sh
     cmd_stop.sh
+    cmd_claude.sh
+    cmd_self.sh
     cmd_docker.sh
     cmd_delete.sh
     cmd_version.sh
@@ -32,6 +34,7 @@ SOURCES=(
     echo
     echo 'CAC_DIR="$HOME/.cac"'
     echo 'ENVS_DIR="$CAC_DIR/envs"'
+    echo 'VERSIONS_DIR="$CAC_DIR/versions"'
     echo
 
     for file in "${SOURCES[@]}"; do

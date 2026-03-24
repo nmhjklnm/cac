@@ -1,87 +1,92 @@
-# ── cmd: setup ─────────────────────────────────────────────────
+# ── cmd: setup (auto-bootstrap, no manual step needed) ─────────
 
-cmd_setup() {
-    echo "=== cac setup ==="
+# Silent, idempotent initialization — called automatically by any command
+_ensure_initialized() {
+    # Already initialized?
+    [[ -f "$CAC_DIR/bin/claude" ]] && [[ -d "$ENVS_DIR" ]] && [[ -d "$VERSIONS_DIR" ]] && return 0
 
+    mkdir -p "$ENVS_DIR" "$VERSIONS_DIR"
+
+    # Find real claude (system-installed or managed)
     local real_claude
     real_claude=$(_find_real_claude)
     if [[ -z "$real_claude" ]]; then
-        echo "错误：找不到 claude 命令，请先安装 Claude CLI" >&2
-        echo "  npm install -g @anthropic-ai/claude-code" >&2
-        exit 1
+        # Check managed versions
+        local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
+        if [[ -n "$latest_ver" ]]; then
+            real_claude="$VERSIONS_DIR/$latest_ver/claude"
+        fi
     fi
-    echo "  真实 claude：$real_claude"
-
-    mkdir -p "$ENVS_DIR"
-    echo "$real_claude" > "$CAC_DIR/real_claude"
+    # If still not found, we can still initialize — env create will handle it
+    if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
+        echo "$real_claude" > "$CAC_DIR/real_claude"
+    fi
 
     local os; os=$(_detect_os)
     _write_wrapper
 
-    # 复制 Node.js 指纹钩子
-    local _hook_src
-    _hook_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fingerprint-hook.js"
-    if [[ -f "$_hook_src" ]]; then
-        cp "$_hook_src" "$CAC_DIR/fingerprint-hook.js"
-        echo "  ✓ fingerprint hook → $CAC_DIR/fingerprint-hook.js"
-    elif [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
-        echo "  ✓ fingerprint hook（已存在）"
-    else
-        echo "  ⚠ fingerprint-hook.js 未找到，Node.js 级指纹拦截不可用" >&2
-    fi
+    # Copy JS hooks from source location (build.sh puts them alongside cac)
+    local _self_dir
+    _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js"
+    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js"
 
-    # 复制 relay.js
-    local _relay_src
-    _relay_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relay.js"
-    if [[ -f "$_relay_src" ]]; then
-        cp "$_relay_src" "$CAC_DIR/relay.js"
-        echo "  ✓ relay → $CAC_DIR/relay.js"
-    elif [[ -f "$CAC_DIR/relay.js" ]]; then
-        echo "  ✓ relay（已存在）"
-    fi
-
+    # Shims
     _write_hostname_shim
     _write_ifconfig_shim
-
     if [[ "$os" == "macos" ]]; then
         _write_ioreg_shim
-        echo "  ✓ ioreg shim → $CAC_DIR/shim-bin/ioreg"
     elif [[ "$os" == "linux" ]]; then
         _write_machine_id_shim
-        echo "  ✓ machine-id shim → $CAC_DIR/shim-bin/cat"
     fi
 
-    echo "  ✓ wrapper → $CAC_DIR/bin/claude"
-    echo "  ✓ hostname shim → $CAC_DIR/shim-bin/hostname"
-    echo "  ✓ ifconfig shim → $CAC_DIR/shim-bin/ifconfig"
+    # DNS guard + blocked hosts
+    _write_dns_guard_js 2>/dev/null || true
+    _write_blocked_hosts 2>/dev/null || true
 
-    # DNS guard (NS 层级遥测拦截 + DoH)
-    _write_dns_guard_js
-    _write_blocked_hosts
-    echo "  ✓ DNS guard → $CAC_DIR/cac-dns-guard.js"
-    echo "  ✓ blocked hosts → $CAC_DIR/blocked_hosts"
+    # mTLS CA
+    _generate_ca_cert 2>/dev/null || true
+    _generate_health_bypass_cert 2>/dev/null || true
 
-    # mTLS CA 证书
-    _generate_ca_cert
-    echo "  ✓ mTLS CA → $CAC_DIR/ca/ca_cert.pem"
+    # PATH (idempotent)
+    local rc_file; rc_file=$(_detect_rc_file)
+    _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
+}
 
-    # 健康检查 bypass 证书
-    if _generate_health_bypass_cert; then
-        echo "  ✓ health bypass cert → $CAC_DIR/ca/hb_cert.pem"
-    fi
-
-    # 自动写入 PATH 到 shell rc 文件
-    local rc_file
-    rc_file=$(_detect_rc_file)
-    _write_path_to_rc "$rc_file"
-
+# Explicit setup command — runs initialization with verbose output
+cmd_setup() {
+    echo "$(_bold "cac setup")"
     echo
-    echo "── 下一步 ──────────────────────────────────────────────"
+
+    _ensure_initialized
+
+    # Find or install Claude Code
+    local real_claude; real_claude=$(_read "$CAC_DIR/real_claude" "")
+    if [[ -z "$real_claude" ]] || [[ ! -x "$real_claude" ]]; then
+        echo "  Claude Code not found"
+        printf "  Install latest version? [Y/n] "
+        read -r _ans
+        if [[ "$_ans" != "n" && "$_ans" != "N" ]]; then
+            _claude_cmd_install latest
+            local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
+            if [[ -n "$latest_ver" ]]; then
+                real_claude="$VERSIONS_DIR/$latest_ver/claude"
+                echo "$real_claude" > "$CAC_DIR/real_claude"
+            fi
+        fi
+    fi
+
+    if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
+        echo "  Claude Code: $(_cyan "$real_claude")"
+    fi
+    echo "  Wrapper: $(_cyan "$CAC_DIR/bin/claude")"
+    echo "  Shims: $(_cyan "$CAC_DIR/shim-bin/")"
+    echo
+
+    local rc_file; rc_file=$(_detect_rc_file)
     if [[ -n "$rc_file" ]]; then
-        echo "1. 执行以下命令使配置生效（或重开终端）："
-        echo "   source $rc_file"
+        echo "  Run to activate: $(_green "source $rc_file")"
     fi
     echo
-    echo "2. 添加第一个代理环境："
-    echo "   cac add <名字> <host:port:user:pass>"
+    echo "  Create environment: $(_green "cac env create <name> [-p <proxy>]")"
 }

@@ -24,30 +24,44 @@ _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] 错误：环境 '$_name' 不存在" >&2; exit 1; }
 
-PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+# Isolated .claude config directory
+if [[ -d "$_env_dir/.claude" ]]; then
+    export CLAUDE_CONFIG_DIR="$_env_dir/.claude"
+fi
 
-# pre-flight：代理连通性（纯 bash，无 fork）
-_hp="${PROXY##*@}"; _hp="${_hp##*://}"
-_host="${_hp%%:*}"
-_port="${_hp##*:}"
-if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
-    echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
-    echo "[cac] 提示：运行 'cac check' 排查，或 'cacstop' 临时停用" >&2
-    exit 1
+# Proxy — optional: only if proxy file exists and is non-empty
+PROXY=""
+if [[ -f "$_env_dir/proxy" ]]; then
+    PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+fi
+
+if [[ -n "$PROXY" ]]; then
+    # pre-flight：代理连通性（纯 bash，无 fork）
+    _hp="${PROXY##*@}"; _hp="${_hp##*://}"
+    _host="${_hp%%:*}"
+    _port="${_hp##*:}"
+    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+        echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
+        echo "[cac] 提示：运行 'cac check' 排查，或 'cac stop' 临时停用" >&2
+        exit 1
+    fi
 fi
 
 # 注入 statsig stable_id
 if [[ -f "$_env_dir/stable_id" ]]; then
     _sid=$(tr -d '[:space:]' < "$_env_dir/stable_id")
-    for _f in "$HOME/.claude/statsig"/statsig.stable_id.*; do
+    _config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    for _f in "$_config_dir/statsig"/statsig.stable_id.*; do
         [[ -f "$_f" ]] && printf '"%s"' "$_sid" > "$_f"
     done
 fi
 
-# 注入环境变量 —— 代理
-export _CAC_PROXY="$PROXY"
-export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
-export NO_PROXY="localhost,127.0.0.1"
+# 注入环境变量 —— 代理（仅在配置了代理时）
+if [[ -n "$PROXY" ]]; then
+    export _CAC_PROXY="$PROXY"
+    export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
+    export NO_PROXY="localhost,127.0.0.1"
+fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── 多层环境变量遥测保护 ──
@@ -93,7 +107,7 @@ if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; 
         export CAC_MTLS_CA="$CAC_DIR/ca/ca_cert.pem"
         export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
     }
-    export CAC_PROXY_HOST="$_hp"
+    [[ -n "${_hp:-}" ]] && export CAC_PROXY_HOST="$_hp"
 fi
 
 # 确保 CA 证书始终被信任（健康检查 bypass 和 mTLS 都需要）
@@ -101,10 +115,12 @@ fi
 
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
-[[ -f "$_env_dir/hostname" ]] && export HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
+if [[ -f "$_env_dir/hostname" ]]; then
+    _hn=$(tr -d '[:space:]' < "$_env_dir/hostname")
+    export HOSTNAME="$_hn" CAC_HOSTNAME="$_hn"
+fi
 
 # Node.js 级指纹拦截（绕过 shell shim 限制）
-[[ -f "$_env_dir/hostname" ]]    && export CAC_HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
 [[ -f "$_env_dir/mac_address" ]] && export CAC_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
 [[ -f "$_env_dir/machine_id" ]]  && export CAC_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
@@ -115,20 +131,24 @@ if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
     esac
 fi
 
-# 执行真实 claude
-_real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
-[[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }
+# 执行真实 claude — versioned binary or system fallback
+_real=""
+if [[ -f "$_env_dir/version" ]]; then
+    _ver=$(tr -d '[:space:]' < "$_env_dir/version")
+    _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    [[ -x "$_ver_bin" ]] && _real="$_ver_bin"
+fi
+if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
+    _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
+fi
+[[ -x "$_real" ]] || { echo "[cac] 错误：找不到 claude，运行 'cac setup'" >&2; exit 1; }
 
-# ── 健康检查 bypass ──
-# Claude Code 启动时健康检查直连 api.anthropic.com，在代理环境下会挂起。
-# 解决：本地 HTTPS server (端口 443) + /etc/hosts 劫持，让健康检查秒过 200。
-# 需要 root 权限（Docker 中默认满足）。健康检查完成后自动清理。
+# ── 健康检查 bypass（仅代理模式）──
 _hb_cert="$CAC_DIR/ca/hb_cert.pem"
 _hb_key="$CAC_DIR/ca/hb_key.pem"
 _hb_pid=""
 
-# 健康检查 bypass（允许失败，不影响主流程）
-if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     (
         node -e "
         var h=require('https'),f=require('fs');
@@ -150,9 +170,9 @@ if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     sleep 0.8
 fi
 
-# ── Relay 本地中转（绕过 TUN）──
+# ── Relay 本地中转（仅代理模式）──
 _relay_active=false
-if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"

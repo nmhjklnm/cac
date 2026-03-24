@@ -99,39 +99,46 @@ cmd_check() {
     fi
 
     local env_dir="$ENVS_DIR/$current"
-    local proxy; proxy=$(_read "$env_dir/proxy")
+    local proxy; proxy=$(_read "$env_dir/proxy" "")
 
     echo "当前环境：$(_bold "$current")"
-    echo "  代理      ：$proxy"
+    echo "  代理      ：${proxy:-（无代理）}"
     echo "  UUID      ：$(_read "$env_dir/uuid")"
     echo "  stable_id ：$(_read "$env_dir/stable_id")"
     echo "  user_id   ：$(_read "$env_dir/user_id" "（旧环境，无此字段）")"
+    echo "  版本      ：$(_read "$env_dir/version" "system")"
     echo "  TZ        ：$(_read "$env_dir/tz" "（未设置）")"
     echo "  LANG      ：$(_read "$env_dir/lang" "（未设置）")"
     echo
 
-    # ── 网络连通性 ──
-    printf "  TCP 连通  ... "
-    if ! _proxy_reachable "$proxy"; then
-        echo "$(_red "✗ 不通")"; return
-    fi
-    echo "$(_green "✓")"
+    # ── 网络连通性（仅在有代理时检查）──
+    if [[ -n "$proxy" ]]; then
+        printf "  TCP 连通  ... "
+        if ! _proxy_reachable "$proxy"; then
+            echo "$(_red "✗ 不通")"; return
+        fi
+        echo "$(_green "✓")"
 
-    printf "  出口 IP   ... "
-    local proxy_ip
-    proxy_ip=$(curl -s --proxy "$proxy" \
-         --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$proxy_ip" ]]; then
-        echo "$(_green "$proxy_ip")"
+        printf "  出口 IP   ... "
+        local proxy_ip
+        proxy_ip=$(curl -s --proxy "$proxy" \
+             --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+        if [[ -n "$proxy_ip" ]]; then
+            echo "$(_green "$proxy_ip")"
+        else
+            echo "$(_yellow "获取失败")"
+        fi
     else
-        echo "$(_yellow "获取失败")"
+        echo "  $(_dim "（无代理，跳过网络检查）")"
     fi
 
-    # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
-    echo
-    echo "── 冲突检测 ────────────────────────────────────────────"
-    printf "  代理冲突  ... "
-    _check_proxy_conflict "$proxy" "$proxy_ip"
+    # ── 本地代理冲突检测（仅在有代理时）──
+    if [[ -n "$proxy" ]]; then
+        echo
+        echo "── 冲突检测 ────────────────────────────────────────────"
+        printf "  代理冲突  ... "
+        _check_proxy_conflict "$proxy" "${proxy_ip:-}"
+    fi
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"

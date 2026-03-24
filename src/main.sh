@@ -3,16 +3,18 @@
 [[ $# -eq 0 ]] && { cmd_help; exit 0; }
 
 case "$1" in
-    setup)              cmd_setup         ;;
-    add)                cmd_add  "${@:2}" ;;
+    env)                cmd_env  "${@:2}" ;;
+    claude)             cmd_claude "${@:2}" ;;
+    self)               cmd_self "${@:2}" ;;
     ls|list)            cmd_ls            ;;
     check)              cmd_check         ;;
     stop)               cmd_stop          ;;
-    -c)                 cmd_continue      ;;
+    resume)             cmd_continue      ;;
     relay)              cmd_relay "${@:2}" ;;
     docker)             cmd_docker "${@:2}" ;;
     delete|uninstall)   cmd_delete        ;;
+    -c)                 echo "$(_yellow "warning:") 'cac -c' is deprecated, use 'cac resume'" >&2; cmd_continue ;;
     -v|--version)       cmd_version       ;;
     help|--help|-h)     cmd_help          ;;
-    *)                  cmd_switch "$1"   ;;
+    *)                  _env_cmd_activate "$1" ;;
 esac
