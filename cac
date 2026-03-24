@@ -31,11 +31,20 @@ _detect_os() {
     esac
 }
 
-_new_uuid()    { uuidgen | tr '[:lower:]' '[:upper:]'; }
-_new_sid()     { uuidgen | tr '[:upper:]' '[:lower:]'; }
+_gen_uuid() {
+    if command -v uuidgen &>/dev/null; then
+        uuidgen
+    elif [[ -f /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        python3 -c "import uuid; print(uuid.uuid4())"
+    fi
+}
+_new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
+_new_sid()     { _gen_uuid | tr '[:upper:]' '[:lower:]'; }
 _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())"; }
-_new_machine_id() { uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
-_new_hostname() { echo "host-$(uuidgen | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
+_new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
+_new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
 
 # 获取真实命令路径（绕过 shim）
@@ -612,24 +621,109 @@ if (mtlsCert && mtlsKey) {
 })();
 
 
-// ─── 4. 健康检查走 NO_PROXY（直连本地 server）─────────────────
-// wrapper 启动本地 HTTPS server + /etc/hosts，并将 api.anthropic.com
-// 加入 NO_PROXY，让健康检查绕过代理走直连 → 本地 server → 200。
-// 3 秒后从 NO_PROXY 中移除，让后续 API 调用走代理。
+// ─── 4. 健康检查 bypass（进程内拦截，精确到 URL）────────────────
+// Claude Code 启动时 ping https://api.anthropic.com/api/hello
+// Cloudflare 拦截 Node.js TLS 指纹（JA3/JA4）→ 403
+// 方案：在 Node.js 层拦截该请求，直接返回 200，不发出任何网络流量
+// 仅拦截 health check，不影响 OAuth/API 等其他请求
 
-(function healthCheckNoProxy() {
-    if (!process.env._CAC_PROXY) return;
+function isHealthCheck(url) {
+    if (!url) return false;
+    // 匹配 https://api.anthropic.com/api/hello 或带查询参数的变体
+    return /^https?:\/\/api\.anthropic\.com\/api\/hello/.test(url);
+}
 
-    // 将健康检查域名加入 NO_PROXY
-    var noProxy = process.env.NO_PROXY || '';
-    process.env.NO_PROXY = noProxy + ',api.anthropic.com';
-    if (process.env.no_proxy) process.env.no_proxy = process.env.no_proxy + ',api.anthropic.com';
+function makeHealthResponse(callback) {
+    var EventEmitter = require('events');
+    var body = '{"message":"hello"}';
 
-    // 3 秒后移除（健康检查已完成，后续 API 调用需要走代理）
-    setTimeout(function() {
-        process.env.NO_PROXY = noProxy;
-        if (process.env.no_proxy) process.env.no_proxy = (process.env.no_proxy || '').replace(',api.anthropic.com', '');
-    }, 3000);
+    // Fake IncomingMessage
+    var res = new EventEmitter();
+    res.statusCode = 200;
+    res.headers = { 'content-type': 'application/json' };
+    res.setEncoding = function() { return res; };
+
+    // Callback first (so caller attaches handlers), then emit data/end
+    if (typeof callback === 'function') {
+        process.nextTick(function() {
+            callback(res);
+            process.nextTick(function() {
+                res.emit('data', body);
+                res.emit('end');
+            });
+        });
+    } else {
+        process.nextTick(function() {
+            res.emit('data', body);
+            res.emit('end');
+        });
+    }
+
+    // Fake ClientRequest (no-op)
+    var req = new EventEmitter();
+    req.end = function() { return req; };
+    req.write = function() { return true; };
+    req.destroy = function() {};
+    req.setTimeout = function() { return req; };
+    req.on = function(ev, fn) { EventEmitter.prototype.on.call(req, ev, fn); return req; };
+    return req;
+}
+
+// 4a. 拦截 https.get / https.request
+var _origHttpsRequest = https.request;
+var _origHttpsGet = https.get;
+
+https.request = function cacHttpsRequest(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsRequest.apply(https, arguments);
+};
+
+https.get = function cacHttpsGet(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsGet.apply(https, arguments);
+};
+
+// 4b. 拦截 fetch（undici 不走 https 模块）
+(function patchHealthFetch() {
+    if (typeof globalThis === 'undefined' || typeof globalThis.fetch !== 'function') return;
+    var _prevFetch = globalThis.fetch;
+    globalThis.fetch = function cacHealthFetch(input, init) {
+        var url = '';
+        try {
+            url = typeof input === 'string' ? input : (input && input.url) ? input.url : '';
+        } catch(e) {}
+        if (isHealthCheck(url)) {
+            return Promise.resolve(new Response('{"message":"hello"}', {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            }));
+        }
+        return _prevFetch(input, init);
+    };
 })();
 DNSGUARD_EOF
     chmod 644 "$guard_file"
@@ -746,27 +840,6 @@ _generate_client_cert() {
 
     # 清理 CSR（不再需要）
     rm -f "$client_csr"
-}
-
-# 生成健康检查 bypass 证书（api.anthropic.com + console.anthropic.com）
-_generate_health_bypass_cert() {
-    local ca_key="$CAC_DIR/ca/ca_key.pem"
-    local ca_cert="$CAC_DIR/ca/ca_cert.pem"
-    local hb_key="$CAC_DIR/ca/hb_key.pem"
-    local hb_cert="$CAC_DIR/ca/hb_cert.pem"
-
-    [[ -f "$ca_key" ]] && [[ -f "$ca_cert" ]] || return 1
-    [[ -f "$hb_cert" ]] && [[ -f "$hb_key" ]] && return 0
-
-    openssl genrsa -out "$hb_key" 2048 2>/dev/null || return 1
-    chmod 600 "$hb_key"
-
-    openssl req -new -key "$hb_key" -subj "/CN=api.anthropic.com/O=cac" 2>/dev/null | \
-    openssl x509 -req -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
-        -days 365 -out "$hb_cert" \
-        -extfile <(printf "subjectAltName=DNS:api.anthropic.com,DNS:console.anthropic.com\nbasicConstraints=CA:FALSE") \
-        2>/dev/null || return 1
-    chmod 644 "$hb_cert"
 }
 
 # 验证 mTLS 证书状态
@@ -919,7 +992,7 @@ if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; 
     [[ -n "${_hp:-}" ]] && export CAC_PROXY_HOST="$_hp"
 fi
 
-# 确保 CA 证书始终被信任（健康检查 bypass 和 mTLS 都需要）
+# 确保 CA 证书始终被信任（mTLS 需要）
 [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
 
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
@@ -952,44 +1025,9 @@ if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
 fi
 [[ -x "$_real" ]] || { echo "[cac] 错误：找不到 claude，运行 'cac setup'" >&2; exit 1; }
 
-# ── 健康检查 bypass（仅代理模式）──
-_hb_cert="$CAC_DIR/ca/hb_cert.pem"
-_hb_key="$CAC_DIR/ca/hb_key.pem"
-_hb_pid=""
-
-if [[ -n "$PROXY" ]] && [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
-    (
-        node -e "
-        var h=require('https'),f=require('fs');
-        h.createServer({cert:f.readFileSync('$_hb_cert'),key:f.readFileSync('$_hb_key')},
-        function(q,r){r.writeHead(200,{'Content-Type':'application/json'});r.end('{\"message\":\"hello\"}')})
-        .listen(443,'127.0.0.1');
-        setTimeout(function(){process.exit()},5000);
-        " </dev/null >/dev/null 2>&1 &
-        _hb_pid=$!
-        sleep 0.5
-        echo "127.0.0.1 api.anthropic.com #cac-health-bypass" >> /etc/hosts 2>/dev/null || true
-        # 3 秒后自动清理（健康检查在 1-2 秒内完成）
-        sleep 3
-        grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
-        rm -f /tmp/_hosts_clean
-        kill "$_hb_pid" 2>/dev/null || true
-    ) &
-    _hb_cleanup_pid=$!
-    sleep 0.8
-fi
-
-# ── Relay 本地中转（自动：有代理 + 检测到 TUN 时启用）──
+# ── Relay 本地中转（有代理时始终启用）──
 _relay_active=false
-_tun_detected=false
-if [[ -n "$PROXY" ]]; then
-    # Auto-detect TUN interfaces (utun* on macOS, tun* on Linux)
-    if ip -o link show 2>/dev/null | grep -qE 'tun[0-9]' || \
-       ifconfig 2>/dev/null | grep -qE '^(utun|tun)[0-9]'; then
-        _tun_detected=true
-    fi
-fi
-if [[ -n "$PROXY" ]] && [[ "$_tun_detected" == "true" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
@@ -1029,15 +1067,9 @@ fi
 
 # 清理函数
 _cleanup_all() {
-    # 清理 health bypass 子进程
-    [[ -n "${_hb_cleanup_pid:-}" ]] && kill "$_hb_cleanup_pid" 2>/dev/null || true
-    grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
-    rm -f /tmp/_hosts_clean
-    # 杀掉残留的 node hello server
-    pkill -f "listen(443" 2>/dev/null || true
     # 清理 relay
-    if [[ "$_relay_active" == "true" ]]; then
-        local _p; _p=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
+    if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
+        local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
         [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
         rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
     fi
@@ -1204,7 +1236,6 @@ _ensure_initialized() {
 
     # mTLS CA
     _generate_ca_cert 2>/dev/null || true
-    _generate_health_bypass_cert 2>/dev/null || true
 
     # PATH (idempotent)
     local rc_file; rc_file=$(_detect_rc_file)
@@ -1797,23 +1828,29 @@ cmd_check() {
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"
-    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
-        printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
-        if _relay_is_running; then
-            local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
-            local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
-            printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    if _relay_is_running; then
+        local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
+        local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
+        printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    elif [[ -n "$proxy" ]]; then
+        # 有代理时临时启动 relay 做连通性测试
+        printf "  Relay 测试 ... "
+        if _relay_start "$current" 2>/dev/null; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+            local relay_ip
+            relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+            if [[ -n "$relay_ip" ]]; then
+                printf "%s (端口=%s, 出口=%s)\n" "$(_green "✓ 连通")" "$rport" "$(_cyan "$relay_ip")"
+            else
+                printf "%s (端口=%s, 代理不通)\n" "$(_yellow "⚠ 启动成功但无法连通")" "$rport"
+            fi
+            _relay_stop 2>/dev/null || true
         else
-            printf "  Relay 进程 ... %s\n" "$(_yellow "未启动（将在 claude 启动时自动启动）")"
+            printf "%s\n" "$(_red "✗ 启动失败")"
         fi
-        if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
-            printf "  直连路由   ... %s\n" "$(_read "$CAC_DIR/relay_route_ip")"
-        fi
+        echo "  $(_dim "（relay 将在 claude 启动时自动启用）")"
     else
-        echo "  Relay 模式 ... 未启用"
-        if _detect_tun_active 2>/dev/null; then
-            echo "    $(_yellow "⚠") 检测到 TUN 模式（relay 会在启动时自动启用）"
-        fi
+        echo "  Relay     ... $(_dim "（无代理，不需要 relay）")"
     fi
 
     echo

@@ -46,7 +46,6 @@ _ensure_initialized() {
 
     # mTLS CA
     _generate_ca_cert 2>/dev/null || true
-    _generate_health_bypass_cert 2>/dev/null || true
 
     # PATH (idempotent)
     local rc_file; rc_file=$(_detect_rc_file)

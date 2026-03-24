@@ -142,23 +142,29 @@ cmd_check() {
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"
-    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
-        printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
-        if _relay_is_running; then
-            local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
-            local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
-            printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    if _relay_is_running; then
+        local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
+        local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
+        printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    elif [[ -n "$proxy" ]]; then
+        # 有代理时临时启动 relay 做连通性测试
+        printf "  Relay 测试 ... "
+        if _relay_start "$current" 2>/dev/null; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+            local relay_ip
+            relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+            if [[ -n "$relay_ip" ]]; then
+                printf "%s (端口=%s, 出口=%s)\n" "$(_green "✓ 连通")" "$rport" "$(_cyan "$relay_ip")"
+            else
+                printf "%s (端口=%s, 代理不通)\n" "$(_yellow "⚠ 启动成功但无法连通")" "$rport"
+            fi
+            _relay_stop 2>/dev/null || true
         else
-            printf "  Relay 进程 ... %s\n" "$(_yellow "未启动（将在 claude 启动时自动启动）")"
+            printf "%s\n" "$(_red "✗ 启动失败")"
         fi
-        if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
-            printf "  直连路由   ... %s\n" "$(_read "$CAC_DIR/relay_route_ip")"
-        fi
+        echo "  $(_dim "（relay 将在 claude 启动时自动启用）")"
     else
-        echo "  Relay 模式 ... 未启用"
-        if _detect_tun_active 2>/dev/null; then
-            echo "    $(_yellow "⚠") 检测到 TUN 模式（relay 会在启动时自动启用）"
-        fi
+        echo "  Relay     ... $(_dim "（无代理，不需要 relay）")"
     fi
 
     echo

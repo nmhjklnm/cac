@@ -113,7 +113,7 @@ if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; 
     [[ -n "${_hp:-}" ]] && export CAC_PROXY_HOST="$_hp"
 fi
 
-# 确保 CA 证书始终被信任（健康检查 bypass 和 mTLS 都需要）
+# 确保 CA 证书始终被信任（mTLS 需要）
 [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
 
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
@@ -146,44 +146,9 @@ if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
 fi
 [[ -x "$_real" ]] || { echo "[cac] 错误：找不到 claude，运行 'cac setup'" >&2; exit 1; }
 
-# ── 健康检查 bypass（仅代理模式）──
-_hb_cert="$CAC_DIR/ca/hb_cert.pem"
-_hb_key="$CAC_DIR/ca/hb_key.pem"
-_hb_pid=""
-
-if [[ -n "$PROXY" ]] && [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
-    (
-        node -e "
-        var h=require('https'),f=require('fs');
-        h.createServer({cert:f.readFileSync('$_hb_cert'),key:f.readFileSync('$_hb_key')},
-        function(q,r){r.writeHead(200,{'Content-Type':'application/json'});r.end('{\"message\":\"hello\"}')})
-        .listen(443,'127.0.0.1');
-        setTimeout(function(){process.exit()},5000);
-        " </dev/null >/dev/null 2>&1 &
-        _hb_pid=$!
-        sleep 0.5
-        echo "127.0.0.1 api.anthropic.com #cac-health-bypass" >> /etc/hosts 2>/dev/null || true
-        # 3 秒后自动清理（健康检查在 1-2 秒内完成）
-        sleep 3
-        grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
-        rm -f /tmp/_hosts_clean
-        kill "$_hb_pid" 2>/dev/null || true
-    ) &
-    _hb_cleanup_pid=$!
-    sleep 0.8
-fi
-
-# ── Relay 本地中转（自动：有代理 + 检测到 TUN 时启用）──
+# ── Relay 本地中转（有代理时始终启用）──
 _relay_active=false
-_tun_detected=false
-if [[ -n "$PROXY" ]]; then
-    # Auto-detect TUN interfaces (utun* on macOS, tun* on Linux)
-    if ip -o link show 2>/dev/null | grep -qE 'tun[0-9]' || \
-       ifconfig 2>/dev/null | grep -qE '^(utun|tun)[0-9]'; then
-        _tun_detected=true
-    fi
-fi
-if [[ -n "$PROXY" ]] && [[ "$_tun_detected" == "true" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
@@ -223,15 +188,9 @@ fi
 
 # 清理函数
 _cleanup_all() {
-    # 清理 health bypass 子进程
-    [[ -n "${_hb_cleanup_pid:-}" ]] && kill "$_hb_cleanup_pid" 2>/dev/null || true
-    grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
-    rm -f /tmp/_hosts_clean
-    # 杀掉残留的 node hello server
-    pkill -f "listen(443" 2>/dev/null || true
     # 清理 relay
-    if [[ "$_relay_active" == "true" ]]; then
-        local _p; _p=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
+    if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
+        local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
         [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
         rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
     fi
