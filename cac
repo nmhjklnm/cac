@@ -1750,23 +1750,21 @@ _check_proxy_conflict() {
 
     # ── 输出结果 ──
     if [[ ${#conflicts[@]} -eq 0 ]]; then
-        echo "$(_green "✓") 未检测到本地代理软件冲突"
+        echo "$(_green "✓") 未检测到代理冲突"
         return 0
     fi
 
-    echo "$(_yellow "⚠ 检测到可能的代理冲突")："
-    for msg in "${conflicts[@]}"; do
-        echo "    $(_yellow "•") $msg"
-    done
-    echo
-    echo "    $(_bold "解决方法")：在本地代理软件中为 cac 代理服务器 IP 添加 DIRECT 规则"
-    echo "    代理服务器：$(_bold "$proxy_host")"
-    echo
-    if [[ "$os" == "macos" ]]; then
-        echo "    Clash 示例（添加到规则列表最前面）："
-        echo "      - IP-CIDR,${proxy_host}/32,DIRECT"
+    # 检查 relay 是否在运行或可用
+    if _relay_is_running 2>/dev/null; then
+        echo "$(_green "✓") 检测到本地代理软件，已通过 relay 自动绕过"
+        return 0
     fi
-    return 1
+
+    echo "$(_green "✓") 检测到本地代理软件，relay 会在 claude 启动时自动绕过"
+    for msg in "${conflicts[@]}"; do
+        echo "    $(_dim "•") $msg"
+    done
+    return 0
 }
 
 cmd_check() {
