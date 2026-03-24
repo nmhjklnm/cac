@@ -890,10 +890,13 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export TELEMETRY_DISABLED=1
 export DISABLE_TELEMETRY=1
 
-# 清除第三方 API 配置，强制走 OAuth 官方端点
-unset ANTHROPIC_BASE_URL
-unset ANTHROPIC_AUTH_TOKEN
-unset ANTHROPIC_API_KEY
+# 有代理时：强制走 OAuth（清除 API 配置防泄露）
+# 无代理时：保留用户的 API Key / Base URL
+if [[ -n "$PROXY" ]]; then
+    unset ANTHROPIC_BASE_URL
+    unset ANTHROPIC_AUTH_TOKEN
+    unset ANTHROPIC_API_KEY
+fi
 
 # ── NS 层级 DNS 拦截 ──
 if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
