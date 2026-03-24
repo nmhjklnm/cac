@@ -1,19 +1,19 @@
 <div align="center">
 
-# cac
+# :umbrella: cac
 
 **Claude Code 小雨伞** — Isolate, protect, and manage your Claude Code.
 
-Run Claude Code your way — isolated, protected, managed.
+*Run Claude Code your way — isolated, protected, managed.*
 
-**[中文](#中文) | [English](#english)**
+**[中文](#中文) | [English](#english) | [:book: Docs](https://cac.nextmind.space/docs)**
 
 [![GitHub stars](https://img.shields.io/github/stars/nmhjklnm/cac?style=social)](https://github.com/nmhjklnm/cac)
 [![Docs](https://img.shields.io/badge/Docs-cac.nextmind.space-D97706.svg)](https://cac.nextmind.space/docs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 
-If this project helps you, give it a :star: — it helps others find it too.
+:star: Star this repo if it helps — it helps others find it too.
 
 </div>
 
