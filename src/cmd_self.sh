@@ -39,11 +39,13 @@ _self_cmd_update() {
 
 cmd_self() {
     case "${1:-help}" in
-        update)     _self_cmd_update ;;
+        update)          _self_cmd_update ;;
+        delete|remove)   cmd_delete ;;
         help|-h|--help)
             echo "$(_bold "cac self") — cac self-management"
             echo
             echo "  $(_bold "update")    Update cac to the latest version"
+            echo "  $(_bold "delete")    Uninstall cac completely"
             ;;
         *) _die "unknown: cac self $1" ;;
     esac

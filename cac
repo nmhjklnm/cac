@@ -1400,6 +1400,10 @@ cmd_env() {
         ls|list)    _env_cmd_ls ;;
         rm|remove)  _env_cmd_rm "${@:2}" ;;
         activate)   _env_cmd_activate "${@:2}" ;;
+        check)      cmd_check ;;
+        relay)      cmd_relay "${@:2}" ;;
+        stop)       cmd_stop ;;
+        resume)     cmd_continue ;;
         help|-h|--help)
             echo "$(_bold "cac env") — environment management"
             echo
@@ -1407,12 +1411,13 @@ cmd_env() {
             echo "  $(_bold "ls")              List all environments"
             echo "  $(_bold "rm") <name>       Remove an environment"
             echo "  $(_bold "activate") <name> Activate (shortcut: cac <name>)"
+            echo "  $(_bold "check")           Verify current environment"
+            echo "  $(_bold "relay") on|off    Local relay (bypass TUN)"
+            echo "  $(_bold "stop") / $(_bold "resume")  Pause / resume protection"
             ;;
         *) _die "unknown: cac env $1" ;;
     esac
 }
-
-cmd_ls() { _env_cmd_ls; }
 
 # ━━━ cmd_relay.sh ━━━
 # ── cmd: relay（本地中转，绕过 TUN）──────────────────────────────
@@ -2054,11 +2059,13 @@ _self_cmd_update() {
 
 cmd_self() {
     case "${1:-help}" in
-        update)     _self_cmd_update ;;
+        update)          _self_cmd_update ;;
+        delete|remove)   cmd_delete ;;
         help|-h|--help)
             echo "$(_bold "cac self") — cac self-management"
             echo
             echo "  $(_bold "update")    Update cac to the latest version"
+            echo "  $(_bold "delete")    Uninstall cac completely"
             ;;
         *) _die "unknown: cac self $1" ;;
     esac
@@ -2646,31 +2653,31 @@ cmd_help() {
 cat <<EOF
 $(_bold "cac") — Claude Code environment manager
 
-$(_bold "Version management:")
-  cac claude install [latest|<ver>]   Install a Claude Code version
-  cac claude uninstall <ver>           Remove an installed version
-  cac claude ls                        List installed versions
-  cac claude pin <ver>                 Pin current environment to a version
+$(_bold "cac claude") — version management
+  install [latest|<ver>]   Install a Claude Code version
+  uninstall <ver>           Remove an installed version
+  ls                        List installed versions
+  pin <ver>                 Pin current environment to a version
 
-$(_bold "Environment management:")
-  cac env create <name> [-p <proxy>] [-c <ver>] [--type local|container]
-  cac env ls                           List all environments
-  cac env rm <name>                    Remove an environment
-  cac <name>                           Activate environment (shortcut)
+$(_bold "cac env") — environment management
+  create <name> [-p <proxy>] [-c <ver>] [--type local|container]
+  ls                        List all environments
+  rm <name>                 Remove an environment
+  activate <name>           Activate (shortcut: cac <name>)
+  check                     Verify current environment
+  relay on|off|status       Local relay (bypass TUN)
+  stop / resume             Pause / resume protection
 
-$(_bold "Self-management:")
-  cac self update                      Update cac to the latest version
+$(_bold "cac self") — self-management
+  update                    Update cac to the latest version
+  delete                    Uninstall cac completely
 
-$(_bold "Other:")
-  cac ls                               List environments (= cac env ls)
-  cac check                            Verify current environment
-  cac relay [on|off|status]            Local relay (bypass TUN)
-  cac stop / resume                    Pause / resume protection
-  cac delete                           Uninstall cac
-  cac -v                               Show version
+$(_bold "cac docker") — containerized mode
+  setup|start|enter|check|port|stop|help
 
-$(_bold "Docker:")
-  cac docker setup|start|enter|check|port|stop|help
+$(_bold "Shortcuts:")
+  cac <name>                = cac env activate <name>
+  cac ls                    = cac env ls
 
 $(_bold "Proxy format:")
   host:port:user:pass       Authenticated (auto-detect protocol)
@@ -2683,14 +2690,8 @@ $(_bold "Examples:")
   cac env create personal
   cac work
   cac claude pin latest
-
-$(_bold "Files:")
-  ~/.cac/versions/<ver>/claude    Claude Code binaries
-  ~/.cac/envs/<name>/             Environment data
-  ~/.cac/envs/<name>/.claude/     Isolated .claude config
-  ~/.cac/envs/<name>/version      Pinned Claude Code version
-  ~/.cac/bin/claude               Wrapper (intercepts claude calls)
-  ~/.cac/current                  Active environment
+  cac env check
+  cac self update
 EOF
 }
 
@@ -2700,21 +2701,21 @@ EOF
 [[ $# -eq 0 ]] && { cmd_help; exit 0; }
 
 case "$1" in
-    env)                cmd_env  "${@:2}" ;;
+    env)                cmd_env    "${@:2}" ;;
     claude)             cmd_claude "${@:2}" ;;
-    self)               cmd_self "${@:2}" ;;
-    ls|list)            cmd_ls            ;;
-    check)              cmd_check         ;;
-    stop)               cmd_stop          ;;
-    resume)             cmd_continue      ;;
-    relay)              cmd_relay "${@:2}" ;;
+    self)               cmd_self   "${@:2}" ;;
     docker)             cmd_docker "${@:2}" ;;
-    delete|uninstall)   cmd_delete        ;;
+    ls|list)            _env_cmd_ls         ;;
+    -v|--version)       cmd_version         ;;
+    help|--help|-h)     cmd_help            ;;
+    # ── deprecated (shims) ──
     add)                echo "$(_yellow "warning:") 'cac add' is deprecated, use 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
-    setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes on first use" >&2 ;;
-    -c)                 echo "$(_yellow "warning:") 'cac -c' is deprecated, use 'cac resume'" >&2; cmd_continue ;;
-    -v|--version)       cmd_version       ;;
-    help|--help|-h)     cmd_help          ;;
+    setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes" >&2 ;;
+    check)              echo "$(_yellow "warning:") 'cac check' moved to 'cac env check'" >&2; cmd_check ;;
+    relay)              echo "$(_yellow "warning:") 'cac relay' moved to 'cac env relay'" >&2; cmd_relay "${@:2}" ;;
+    stop)               echo "$(_yellow "warning:") 'cac stop' moved to 'cac env stop'" >&2; cmd_stop ;;
+    resume|-c)          echo "$(_yellow "warning:") use 'cac env resume'" >&2; cmd_continue ;;
+    delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' moved to 'cac self delete'" >&2; cmd_delete ;;
     *)                  _env_cmd_activate "$1" ;;
 esac
 

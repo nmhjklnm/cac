@@ -4,31 +4,31 @@ cmd_help() {
 cat <<EOF
 $(_bold "cac") — Claude Code environment manager
 
-$(_bold "Version management:")
-  cac claude install [latest|<ver>]   Install a Claude Code version
-  cac claude uninstall <ver>           Remove an installed version
-  cac claude ls                        List installed versions
-  cac claude pin <ver>                 Pin current environment to a version
+$(_bold "cac claude") — version management
+  install [latest|<ver>]   Install a Claude Code version
+  uninstall <ver>           Remove an installed version
+  ls                        List installed versions
+  pin <ver>                 Pin current environment to a version
 
-$(_bold "Environment management:")
-  cac env create <name> [-p <proxy>] [-c <ver>] [--type local|container]
-  cac env ls                           List all environments
-  cac env rm <name>                    Remove an environment
-  cac <name>                           Activate environment (shortcut)
+$(_bold "cac env") — environment management
+  create <name> [-p <proxy>] [-c <ver>] [--type local|container]
+  ls                        List all environments
+  rm <name>                 Remove an environment
+  activate <name>           Activate (shortcut: cac <name>)
+  check                     Verify current environment
+  relay on|off|status       Local relay (bypass TUN)
+  stop / resume             Pause / resume protection
 
-$(_bold "Self-management:")
-  cac self update                      Update cac to the latest version
+$(_bold "cac self") — self-management
+  update                    Update cac to the latest version
+  delete                    Uninstall cac completely
 
-$(_bold "Other:")
-  cac ls                               List environments (= cac env ls)
-  cac check                            Verify current environment
-  cac relay [on|off|status]            Local relay (bypass TUN)
-  cac stop / resume                    Pause / resume protection
-  cac delete                           Uninstall cac
-  cac -v                               Show version
+$(_bold "cac docker") — containerized mode
+  setup|start|enter|check|port|stop|help
 
-$(_bold "Docker:")
-  cac docker setup|start|enter|check|port|stop|help
+$(_bold "Shortcuts:")
+  cac <name>                = cac env activate <name>
+  cac ls                    = cac env ls
 
 $(_bold "Proxy format:")
   host:port:user:pass       Authenticated (auto-detect protocol)
@@ -41,13 +41,7 @@ $(_bold "Examples:")
   cac env create personal
   cac work
   cac claude pin latest
-
-$(_bold "Files:")
-  ~/.cac/versions/<ver>/claude    Claude Code binaries
-  ~/.cac/envs/<name>/             Environment data
-  ~/.cac/envs/<name>/.claude/     Isolated .claude config
-  ~/.cac/envs/<name>/version      Pinned Claude Code version
-  ~/.cac/bin/claude               Wrapper (intercepts claude calls)
-  ~/.cac/current                  Active environment
+  cac env check
+  cac self update
 EOF
 }
