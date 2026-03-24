@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "cac",
   "description": "Isolate, protect, and manage your Claude Code",
-  "theme": "venus",
+  "theme": "maple",
   "colors": {
     "primary": "#D97706",
     "light": "#FBBF24",
@@ -17,7 +17,7 @@
     "links": [
       {
         "label": "GitHub",
-        "url": "https://github.com/nmhjklnm/cac"
+        "href": "https://github.com/nmhjklnm/cac"
       }
     ]
   },
