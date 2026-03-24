@@ -262,24 +262,109 @@ if (mtlsCert && mtlsKey) {
 })();
 
 
-// ─── 4. 健康检查走 NO_PROXY（直连本地 server）─────────────────
-// wrapper 启动本地 HTTPS server + /etc/hosts，并将 api.anthropic.com
-// 加入 NO_PROXY，让健康检查绕过代理走直连 → 本地 server → 200。
-// 3 秒后从 NO_PROXY 中移除，让后续 API 调用走代理。
+// ─── 4. 健康检查 bypass（进程内拦截，精确到 URL）────────────────
+// Claude Code 启动时 ping https://api.anthropic.com/api/hello
+// Cloudflare 拦截 Node.js TLS 指纹（JA3/JA4）→ 403
+// 方案：在 Node.js 层拦截该请求，直接返回 200，不发出任何网络流量
+// 仅拦截 health check，不影响 OAuth/API 等其他请求
 
-(function healthCheckNoProxy() {
-    if (!process.env._CAC_PROXY) return;
+function isHealthCheck(url) {
+    if (!url) return false;
+    // 匹配 https://api.anthropic.com/api/hello 或带查询参数的变体
+    return /^https?:\/\/api\.anthropic\.com\/api\/hello/.test(url);
+}
 
-    // 将健康检查域名加入 NO_PROXY
-    var noProxy = process.env.NO_PROXY || '';
-    process.env.NO_PROXY = noProxy + ',api.anthropic.com';
-    if (process.env.no_proxy) process.env.no_proxy = process.env.no_proxy + ',api.anthropic.com';
+function makeHealthResponse(callback) {
+    var EventEmitter = require('events');
+    var body = '{"message":"hello"}';
 
-    // 3 秒后移除（健康检查已完成，后续 API 调用需要走代理）
-    setTimeout(function() {
-        process.env.NO_PROXY = noProxy;
-        if (process.env.no_proxy) process.env.no_proxy = (process.env.no_proxy || '').replace(',api.anthropic.com', '');
-    }, 3000);
+    // Fake IncomingMessage
+    var res = new EventEmitter();
+    res.statusCode = 200;
+    res.headers = { 'content-type': 'application/json' };
+    res.setEncoding = function() { return res; };
+
+    // Callback first (so caller attaches handlers), then emit data/end
+    if (typeof callback === 'function') {
+        process.nextTick(function() {
+            callback(res);
+            process.nextTick(function() {
+                res.emit('data', body);
+                res.emit('end');
+            });
+        });
+    } else {
+        process.nextTick(function() {
+            res.emit('data', body);
+            res.emit('end');
+        });
+    }
+
+    // Fake ClientRequest (no-op)
+    var req = new EventEmitter();
+    req.end = function() { return req; };
+    req.write = function() { return true; };
+    req.destroy = function() {};
+    req.setTimeout = function() { return req; };
+    req.on = function(ev, fn) { EventEmitter.prototype.on.call(req, ev, fn); return req; };
+    return req;
+}
+
+// 4a. 拦截 https.get / https.request
+var _origHttpsRequest = https.request;
+var _origHttpsGet = https.get;
+
+https.request = function cacHttpsRequest(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsRequest.apply(https, arguments);
+};
+
+https.get = function cacHttpsGet(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsGet.apply(https, arguments);
+};
+
+// 4b. 拦截 fetch（undici 不走 https 模块）
+(function patchHealthFetch() {
+    if (typeof globalThis === 'undefined' || typeof globalThis.fetch !== 'function') return;
+    var _prevFetch = globalThis.fetch;
+    globalThis.fetch = function cacHealthFetch(input, init) {
+        var url = '';
+        try {
+            url = typeof input === 'string' ? input : (input && input.url) ? input.url : '';
+        } catch(e) {}
+        if (isHealthCheck(url)) {
+            return Promise.resolve(new Response('{"message":"hello"}', {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            }));
+        }
+        return _prevFetch(input, init);
+    };
 })();
 DNSGUARD_EOF
     chmod 644 "$guard_file"

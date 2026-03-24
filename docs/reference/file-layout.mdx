@@ -1,0 +1,61 @@
+---
+title: "File layout"
+description: "Where cac stores its data."
+icon: "folder-tree"
+---
+
+```
+~/.cac/
+├── versions/                     # managed Claude Code binaries
+│   ├── 2.1.81/
+│   │   ├── claude                # ELF/Mach-O binary
+│   │   └── .version              # version metadata
+│   ├── 2.1.80/
+│   │   └── claude
+│   └── .latest                   # tracks "latest" version string
+│
+├── envs/                         # environments
+│   └── work/
+│       ├── .claude/              # isolated CLAUDE_CONFIG_DIR
+│       │   ├── settings.json
+│       │   ├── projects/
+│       │   └── ...
+│       ├── proxy                 # proxy URL (optional)
+│       ├── version               # pinned Claude Code version
+│       ├── type                  # "local" or "container"
+│       ├── uuid                  # fake hardware UUID
+│       ├── stable_id             # fake statsig stable ID
+│       ├── user_id               # fake user ID (hex)
+│       ├── machine_id            # fake /etc/machine-id
+│       ├── hostname              # fake hostname
+│       ├── mac_address           # fake MAC address
+│       ├── tz                    # timezone
+│       ├── lang                  # locale
+│       ├── client_cert.pem       # mTLS client certificate
+│       └── client_key.pem        # mTLS private key
+│
+├── bin/
+│   └── claude                    # wrapper script (intercepts all claude calls)
+│
+├── shim-bin/                     # device identity shims
+│   ├── hostname                  # returns fake hostname
+│   ├── ifconfig                  # returns fake MAC
+│   ├── ioreg                     # macOS: returns fake IOPlatformUUID
+│   └── cat                       # Linux: intercepts /etc/machine-id
+│
+├── fingerprint-hook.js           # Node.js preload: os.hostname, networkInterfaces, userInfo
+├── relay.js                      # TCP relay server (auto-managed)
+├── cac-dns-guard.js              # DNS + fetch telemetry interception
+├── blocked_hosts                 # HOSTALIASES file for telemetry domains
+│
+├── ca/                           # certificate authority
+│   ├── ca_cert.pem               # self-signed CA
+│   ├── ca_key.pem                # CA private key
+│   ├── hb_cert.pem               # health check bypass cert
+│   └── hb_key.pem                # health check bypass key
+│
+├── current                       # name of active environment
+├── stopped                       # presence = deactivated
+├── real_claude                   # path to system Claude Code binary
+└── relay.pid / relay.port        # relay process state
+```

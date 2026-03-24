@@ -82,27 +82,6 @@ _generate_client_cert() {
     rm -f "$client_csr"
 }
 
-# 生成健康检查 bypass 证书（api.anthropic.com + console.anthropic.com）
-_generate_health_bypass_cert() {
-    local ca_key="$CAC_DIR/ca/ca_key.pem"
-    local ca_cert="$CAC_DIR/ca/ca_cert.pem"
-    local hb_key="$CAC_DIR/ca/hb_key.pem"
-    local hb_cert="$CAC_DIR/ca/hb_cert.pem"
-
-    [[ -f "$ca_key" ]] && [[ -f "$ca_cert" ]] || return 1
-    [[ -f "$hb_cert" ]] && [[ -f "$hb_key" ]] && return 0
-
-    openssl genrsa -out "$hb_key" 2048 2>/dev/null || return 1
-    chmod 600 "$hb_key"
-
-    openssl req -new -key "$hb_key" -subj "/CN=api.anthropic.com/O=cac" 2>/dev/null | \
-    openssl x509 -req -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
-        -days 365 -out "$hb_cert" \
-        -extfile <(printf "subjectAltName=DNS:api.anthropic.com,DNS:console.anthropic.com\nbasicConstraints=CA:FALSE") \
-        2>/dev/null || return 1
-    chmod 644 "$hb_cert"
-}
-
 # 验证 mTLS 证书状态
 _check_mtls() {
     local env_dir="$1"

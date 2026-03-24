@@ -1,0 +1,46 @@
+---
+title: "cac docker"
+sidebarTitle: "docker"
+description: "带网络隔离的容器化 Claude Code。"
+icon: "docker"
+---
+
+在完全隔离的 Docker 容器中运行 Claude Code，支持 sing-box TUN 透明代理和 cac 身份保护。
+
+详细设置说明请参见 [Docker 模式指南](/guides/docker-mode)。
+
+## 命令
+
+| 命令 | 说明 |
+|:---|:---|
+| `cac docker setup` | 配置代理和网络（交互式） |
+| `cac docker start` | 启动容器 |
+| `cac docker stop` | 停止容器 |
+| `cac docker restart` | 重启容器 |
+| `cac docker enter` | 进入容器 Shell |
+| `cac docker check` | 网络 + 身份诊断 |
+| `cac docker port <port>` | 将端口转发到本地主机 |
+| `cac docker status` | 显示容器状态 |
+| `cac docker logs` | 查看容器日志 |
+| `cac docker destroy` | 移除容器和网络 |
+
+## 代理格式
+
+Docker 模式除了支持紧凑格式外，还支持分享链接：
+
+```
+ip:port:user:pass          # 紧凑格式（SOCKS5）
+ss://...                   # Shadowsocks
+vmess://...                # VMess
+vless://...                # VLESS
+trojan://...               # Trojan
+```
+
+## 网络模式
+
+| 模式 | 适用场景 | 方式 |
+|:---|:---|:---|
+| 远程（macvlan） | 使用 Docker Engine 的 Linux 服务器 | 容器在局域网上获得独立 IP，完全绕过主机网络栈 |
+| 本地（bridge） | 使用 Docker Desktop 的笔记本电脑 | 容器使用 Docker 桥接网络，代理流量加密传输 |
+
+模式根据你的 Docker 安装方式自动检测。

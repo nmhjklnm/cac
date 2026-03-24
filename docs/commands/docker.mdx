@@ -1,0 +1,46 @@
+---
+title: "cac docker"
+sidebarTitle: "docker"
+description: "Containerized Claude Code with network isolation."
+icon: "docker"
+---
+
+Run Claude Code in a fully isolated Docker container with sing-box TUN transparent proxy and cac identity protection.
+
+See the [Docker mode guide](/guides/docker-mode) for detailed setup instructions.
+
+## Commands
+
+| Command | Description |
+|:---|:---|
+| `cac docker setup` | Configure proxy and network (interactive) |
+| `cac docker start` | Start the container |
+| `cac docker stop` | Stop the container |
+| `cac docker restart` | Restart the container |
+| `cac docker enter` | Shell into the container |
+| `cac docker check` | Network + identity diagnostics |
+| `cac docker port <port>` | Forward a port to localhost |
+| `cac docker status` | Show container status |
+| `cac docker logs` | View container logs |
+| `cac docker destroy` | Remove container and network |
+
+## Proxy formats
+
+Docker mode supports share links in addition to compact format:
+
+```
+ip:port:user:pass          # compact (SOCKS5)
+ss://...                   # Shadowsocks
+vmess://...                # VMess
+vless://...                # VLESS
+trojan://...               # Trojan
+```
+
+## Network modes
+
+| Mode | When | How |
+|:---|:---|:---|
+| Remote (macvlan) | Linux server with Docker Engine | Container gets its own IP on the LAN, completely bypasses host network stack |
+| Local (bridge) | Laptop with Docker Desktop | Container uses Docker bridge network, proxy traffic is encrypted |
+
+Mode is auto-detected based on your Docker installation.

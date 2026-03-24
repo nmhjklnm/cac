@@ -1,0 +1,88 @@
+---
+title: "Quickstart"
+description: "Install cac and create your first isolated environment."
+icon: "rocket"
+---
+
+<Steps>
+  <Step title="Install cac">
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install -g claude-cac
+        ```
+      </Tab>
+      <Tab title="Script">
+        ```bash
+        curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
+        ```
+      </Tab>
+    </Tabs>
+
+    No `setup` command needed — cac auto-initializes on first use.
+  </Step>
+
+  <Step title="Install a Claude Code version">
+    ```bash
+    cac claude install latest
+    ```
+
+    Downloads the latest Claude Code binary with SHA256 verification. You can also install a specific version:
+
+    ```bash
+    cac claude install 2.1.81
+    ```
+  </Step>
+
+  <Step title="Create an environment">
+    Every environment gets an isolated identity (UUID, hostname, MAC) and its own `.claude` config directory.
+
+    ```bash
+    # Minimal — just identity isolation
+    cac env create personal
+
+    # With proxy
+    cac env create work -p 1.2.3.4:1080:user:pass
+
+    # With proxy + pinned version
+    cac env create work -p 1.2.3.4:1080:user:pass -c 2.1.81
+    ```
+
+    <Info>
+    Proxy is optional. If you use an API key with a base URL, you don't need `-p` at all. See [API key users](/guides/api-key-users).
+    </Info>
+  </Step>
+
+  <Step title="Activate and run">
+    ```bash
+    cac work
+    claude
+    ```
+
+    The first time, type `/login` in Claude Code to complete OAuth. After that, just `claude`.
+  </Step>
+</Steps>
+
+## What just happened?
+
+When you activated `work` and ran `claude`, cac's wrapper:
+
+1. Set `CLAUDE_CONFIG_DIR` to `~/.cac/envs/work/.claude/` (isolated config)
+2. Resolved the pinned Claude Code binary from `~/.cac/versions/2.1.81/claude`
+3. Injected device fingerprint shims (hostname, UUID, MAC)
+4. Blocked telemetry endpoints via DNS guard + environment variables
+5. Routed traffic through your proxy (if configured)
+6. Launched the real Claude Code binary
+
+All of this is invisible to Claude Code — it sees a normal environment.
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Proxy setup" icon="globe" href="/guides/proxy-setup">
+    Protocol auto-detection, SOCKS5, share links.
+  </Card>
+  <Card title="Docker mode" icon="docker" href="/guides/docker-mode">
+    Fully isolated container with TUN networking.
+  </Card>
+</Columns>

@@ -1,0 +1,62 @@
+---
+title: "cac claude"
+sidebarTitle: "claude"
+description: "Claude Code 版本管理。"
+icon: "download"
+---
+
+管理 Claude Code 二进制版本。二进制文件从 Anthropic 官方分发渠道下载，并进行 SHA256 校验验证。
+
+## install
+
+下载并安装 Claude Code 版本。
+
+```bash
+cac claude install latest
+cac claude install 2.1.81
+```
+
+如果版本已安装，则不执行任何操作。下载过程会显示进度条。
+
+在 `cac env create` 中使用 `-c latest` 时，版本会被解析并自动安装——无需先运行 `install`。
+
+## ls
+
+列出所有已安装的 Claude Code 版本。
+
+```bash
+cac claude ls
+```
+
+```
+Installed Claude Code versions:
+
+  2.1.81 (latest) — 2 environment(s)
+  2.1.80
+
+  System: /root/.local/bin/claude (2.1.81)
+```
+
+显示哪个版本被标记为 `latest`、每个版本被多少个环境使用，以及系统安装的 Claude Code 路径（如果存在）。
+
+## pin
+
+将当前活跃环境锁定到指定版本。
+
+```bash
+cac claude pin 2.1.81
+```
+
+这会将版本写入 `~/.cac/envs/<name>/version`。包装器在启动时解析此文件，因此更改会在下次 `claude` 调用时生效。
+
+## uninstall
+
+移除已安装的版本。如果有环境正在使用该版本，操作会失败。
+
+```bash
+cac claude uninstall 2.1.80
+```
+
+<Warning>
+不能卸载被任何环境锁定的版本。请先移除或重新锁定那些环境。
+</Warning>

@@ -1,0 +1,75 @@
+---
+title: "Docker mode"
+description: "Run Claude Code in a fully isolated container with TUN networking."
+icon: "docker"
+---
+
+Docker mode provides the strongest isolation: a separate network namespace with sing-box TUN transparent proxy, plus cac identity protection and Claude Code pre-installed.
+
+## Quick start
+
+```bash
+cac docker setup     # paste your proxy address
+cac docker start     # start container
+cac docker enter     # shell in — claude + cac ready
+```
+
+## Setup
+
+`cac docker setup` is an interactive wizard that:
+
+1. Asks for your proxy address (supports compact and share link formats)
+2. Auto-detects local vs remote Docker installation
+3. Auto-detects network parameters (interface, subnet, gateway) for macvlan mode
+4. Writes configuration to `docker/.env`
+
+### Proxy formats
+
+```
+ip:port:user:pass          # compact SOCKS5
+ss://...                   # Shadowsocks share link
+vmess://...                # VMess share link
+vless://...                # VLESS share link
+trojan://...               # Trojan share link
+```
+
+## What happens inside the container
+
+On first boot, the entrypoint automatically:
+
+<Steps>
+  <Step title="Start sing-box TUN">
+    All container traffic is transparently routed through your proxy at the kernel level. No proxy environment variables visible to applications.
+  </Step>
+  <Step title="Detect timezone and locale">
+    Queries the exit IP to determine timezone and language, then configures the container.
+  </Step>
+  <Step title="Create cac profile">
+    Generates a unique identity (UUID, hostname, MAC, machine ID) and mTLS certificate.
+  </Step>
+  <Step title="Activate profile">
+    Sets environment variables and writes to `/root/.cac-env` for persistence across shell sessions.
+  </Step>
+</Steps>
+
+## Persistent storage
+
+`/root` and `/home` are bind-mounted to `docker/data/` on the host. Your Claude Code sessions, settings, and work files survive container restarts.
+
+## Port forwarding
+
+To expose a port from the container (e.g., a dev server):
+
+```bash
+cac docker port 6287
+```
+
+This starts a socat/python3 relay from `localhost:6287` on the host to the container.
+
+## Diagnostics
+
+```bash
+cac docker check
+```
+
+Checks TUN status, DNS, TCP/HTTP connectivity, exit IP, leak detection, and identity spoofing.

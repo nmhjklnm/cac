@@ -1,0 +1,54 @@
+---
+title: "从旧版迁移"
+description: "从旧命令结构更新你的工作流程。"
+icon: "arrow-right"
+---
+
+如果你在环境管理器更新之前使用过 cac，以下是变化内容。
+
+## 命令映射
+
+| 旧命令 | 新命令 | 说明 |
+|:---|:---|:---|
+| `cac setup` | — | 不再需要。首次使用时自动初始化。 |
+| `cac add us1 proxy` | `cac env create us1 -p proxy` | 代理现在是 `-p` 参数，不再是位置参数。 |
+| `cac us1` | `cac us1` | 不变——`cac env activate us1` 的快捷方式。 |
+| `cac ls` | `cac ls` | 不变——`cac env ls` 的快捷方式。 |
+| `cac check` | `cac env check` | 移至 `env` 子命令下。 |
+| `cac stop` | `cac env deactivate` | 已重命名。完全停用环境。 |
+| `cac -c` | `cac env activate <name>` | 改为通过名称重新激活。 |
+| `cac relay on/off` | — | 中继现在是自动的（TUN 自动检测）。 |
+| `cac delete` | `cac self delete` | 移至 `self` 子命令下。 |
+
+## 弃用警告
+
+所有旧命令仍然可用，但会打印警告并显示新的等效命令：
+
+```
+$ cac add us1 proxy
+warning: 'cac add' → 'cac env create <name> -p <proxy>'
+
+$ cac stop
+warning: 'cac stop' → 'cac env deactivate'
+```
+
+## 新功能
+
+| 功能 | 命令 |
+|:---|:---|
+| 安装 Claude Code 版本 | `cac claude install latest` |
+| 将环境锁定到版本 | `cac claude pin 2.1.81` |
+| 创建无代理的环境 | `cac env create personal` |
+| 自动安装版本 | `cac env create work -c 2.1.81` |
+| 更新 cac | `cac self update` |
+
+## 现有环境
+
+你现有的 `~/.cac/envs/` 环境继续正常工作。它们在 `cac ls` 中会显示 `claude: system`，因为没有锁定版本。你可以锁定它们：
+
+```bash
+cac us1                      # 激活旧环境
+cac claude pin 2.1.81        # 锁定到托管版本
+```
+
+`.claude` 隔离目录（`~/.cac/envs/<name>/.claude/`）会在下次激活时自动创建（如果尚不存在）。

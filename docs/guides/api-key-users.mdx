@@ -1,0 +1,73 @@
+---
+title: "API key users"
+description: "Use cac for fingerprint isolation without a proxy."
+icon: "key"
+---
+
+If you connect to Claude Code using an API key and base URL (not OAuth), you can still use cac for identity isolation and telemetry blocking — no proxy needed.
+
+## Setup
+
+```bash
+# Install cac
+npm install -g claude-cac
+
+# Create an environment (no -p flag)
+cac env create work
+
+# Activate
+cac work
+
+# Set your API credentials (cac preserves these)
+export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_BASE_URL=https://your-endpoint.com
+
+# Run Claude Code
+claude
+```
+
+## What's protected
+
+Without a proxy, cac still provides:
+
+| Protection | Status |
+|:---|:---|
+| Device fingerprint isolation (UUID, hostname, MAC) | Active |
+| `.claude` config isolation | Active |
+| Telemetry blocking (DNS guard + env vars) | Active |
+| mTLS client certificates | Active |
+| Claude Code version pinning | Active |
+| Proxy routing | Not applicable |
+| Health check bypass | Not applicable |
+
+## How API vars are handled
+
+When **no proxy** is configured, cac preserves your environment variables:
+- `ANTHROPIC_API_KEY` — kept
+- `ANTHROPIC_BASE_URL` — kept
+- `ANTHROPIC_AUTH_TOKEN` — kept
+
+When a **proxy is configured**, cac clears these variables to force OAuth authentication through the proxy. This prevents accidental API key leakage through third-party endpoints.
+
+## Multiple API endpoints
+
+You can create separate environments for different API endpoints:
+
+```bash
+cac env create prod-us
+cac env create prod-eu
+cac env create staging
+```
+
+Each gets its own identity and `.claude` config. Switch between them:
+
+```bash
+cac prod-us
+export ANTHROPIC_BASE_URL=https://us.api.example.com
+claude
+
+# Later...
+cac prod-eu
+export ANTHROPIC_BASE_URL=https://eu.api.example.com
+claude
+```

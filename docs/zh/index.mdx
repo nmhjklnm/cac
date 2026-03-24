@@ -1,0 +1,63 @@
+---
+title: "cac"
+sidebarTitle: "介绍"
+description: "隔离、保护和管理你的 Claude Code"
+icon: "umbrella"
+---
+
+**cac** 让你完全掌控 Claude Code 运行时——版本、配置、身份和网络——通过一个 CLI 即可管理。
+
+每个环境完全隔离：独立的 Claude Code 二进制文件、`.claude` 配置目录、设备指纹和可选的代理路由。
+
+<Columns cols={2}>
+  <Card title="快速开始" icon="rocket" href="/quickstart">
+    60 秒内创建你的第一个隔离环境。
+  </Card>
+  <Card title="核心概念" icon="lightbulb" href="/concepts">
+    版本、环境和隔离如何协同工作。
+  </Card>
+  <Card title="命令参考" icon="terminal" href="/commands/env">
+    cac claude、env、self 和 docker 的完整参考。
+  </Card>
+  <Card title="工作原理" icon="shield-halved" href="/reference/how-it-works">
+    包装器架构、指纹层、遥测拦截。
+  </Card>
+</Columns>
+
+## cac 做了什么
+
+<AccordionGroup>
+  <Accordion title="版本管理" icon="download" defaultOpen={true}>
+    下载、锁定和切换 Claude Code 二进制文件。每个环境可以使用不同的版本。
+    ```bash
+    cac claude install latest
+    cac claude pin 2.1.81
+    ```
+  </Accordion>
+  <Accordion title="配置隔离" icon="folder-tree">
+    每个环境拥有独立的 `CLAUDE_CONFIG_DIR`——会话、设置、记忆和认证令牌完全分离。
+  </Accordion>
+  <Accordion title="指纹伪装" icon="fingerprint">
+    Shell 代理脚本 + Node.js 钩子替换所有设备标识符：硬件 UUID、主机名、MAC 地址、机器 ID。
+  </Accordion>
+  <Accordion title="遥测拦截" icon="shield">
+    DNS 守卫 + 12 个环境变量 + fetch 拦截 + HOSTALIASES——多层独立防护。
+  </Accordion>
+  <Accordion title="代理路由" icon="globe">
+    可选的进程级 HTTP/SOCKS5 代理，支持自动协议检测。检测到 TUN 冲突时自动中继。
+  </Accordion>
+</AccordionGroup>
+
+## 命令概览
+
+```bash
+cac claude   install | ls | pin | uninstall       # 版本管理
+cac env      create | ls | rm | activate |        # 环境管理
+             deactivate | check
+cac self     update | delete                      # 自身管理
+cac docker   setup | start | enter | ...          # 容器化模式
+```
+
+<Tip>
+代理是可选的。API Key 用户同样享有指纹隔离和遥测拦截——只需省略 `-p` 参数。参见 [API Key 用户](/guides/api-key-users)。
+</Tip>

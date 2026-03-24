@@ -1,0 +1,51 @@
+---
+title: "代理设置"
+description: "配置代理：自动检测、SOCKS5 和分享链接。"
+icon: "globe"
+---
+
+## 代理格式
+
+cac 支持多种代理格式。通过 `-p` 参数传入：
+
+```bash
+cac env create work -p 1.2.3.4:1080:user:pass
+cac env create work -p socks5://user:pass@1.2.3.4:1080
+cac env create work -p http://1.2.3.4:8080
+```
+
+| 格式 | 示例 |
+|:---|:---|
+| 带认证的紧凑格式 | `1.2.3.4:1080:user:pass` |
+| 无认证的紧凑格式 | `1.2.3.4:1080` |
+| 显式 SOCKS5 | `socks5://user:pass@host:port` |
+| 显式 HTTP | `http://host:port` |
+| 显式 HTTPS | `https://host:port` |
+
+## 协议自动检测
+
+当使用紧凑格式（`host:port:user:pass`）时，cac 会自动探测代理以检测协议：
+
+1. 尝试 HTTP
+2. 尝试 SOCKS5
+3. 尝试 HTTPS
+4. 如果全部失败，回退到 HTTP
+
+## TUN 冲突
+
+如果你运行了 TUN 模式的代理软件（Clash、Surge、sing-box、V2Ray），它会捕获所有流量——包括 cac 的代理连接。这会造成双重代理循环。
+
+cac 会自动处理：当检测到 TUN 接口（`tun*` 或 `utun*`）时，它会在 `127.0.0.1` 上启动本地 TCP 中继。回环流量绕过 TUN，因此中继直接连接到你的远程代理。
+
+```
+claude ──► wrapper ──► relay (127.0.0.1) ──► remote proxy ──► API
+                        ↑ 回环流量绕过 TUN
+```
+
+无需手动配置。
+
+## 健康检查绕过
+
+Claude Code 在启动时会 ping `api.anthropic.com`。通过代理时，Cloudflare 经常返回 403（Node.js TLS 指纹被拒绝）。cac 通过临时运行一个本地 HTTPS 服务器（端口 443，使用受信任的证书）来绕过此问题，使健康检查立即完成。
+
+这是自动的，仅在每次 `claude` 会话的前几秒内活跃。

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "cac",
+  "description": "Isolate, protect, and manage your Claude Code",
+  "theme": "maple",
+  "colors": {
+    "primary": "#D97706",
+    "light": "#FBBF24",
+    "dark": "#B45309"
+  },
+  "logo": {
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg"
+  },
+  "favicon": "/images/favicon.png",
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/nmhjklnm/cac"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/nmhjklnm/cac"
+    }
+  },
+  "rounded": "default",
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "claude",
+      "chatgpt",
+      {
+        "title": "GitHub Issues",
+        "description": "Report a bug or request a feature",
+        "icon": "github",
+        "iconType": "brands",
+        "href": "https://github.com/nmhjklnm/cac/issues"
+      }
+    ]
+  },
+  "tabs": [
+    {
+      "id": "guides",
+      "name": "Guides",
+      "icon": "book"
+    },
+    {
+      "id": "reference",
+      "name": "Reference",
+      "icon": "code"
+    }
+  ],
+  "navigation": {
+    "languages": [
+      {
+        "language": "en",
+        "default": true,
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "index",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Commands",
+            "pages": [
+              "commands/claude",
+              "commands/env",
+              "commands/self",
+              "commands/docker"
+            ]
+          }
+        ],
+        "tabs": {
+          "guides": [
+            {
+              "group": "Guides",
+              "pages": [
+                "guides/proxy-setup",
+                "guides/api-key-users",
+                "guides/docker-mode",
+                "guides/migrating"
+              ]
+            }
+          ],
+          "reference": [
+            {
+              "group": "Reference",
+              "pages": [
+                "reference/file-layout",
+                "reference/how-it-works",
+                "reference/privacy-layers"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "language": "zh",
+        "groups": [
+          {
+            "group": "快速上手",
+            "pages": [
+              "zh/index",
+              "zh/quickstart",
+              "zh/concepts"
+            ]
+          },
+          {
+            "group": "命令",
+            "pages": [
+              "zh/commands/claude",
+              "zh/commands/env",
+              "zh/commands/self",
+              "zh/commands/docker"
+            ]
+          }
+        ],
+        "tabs": {
+          "guides": [
+            {
+              "group": "指南",
+              "pages": [
+                "zh/guides/proxy-setup",
+                "zh/guides/api-key-users",
+                "zh/guides/docker-mode",
+                "zh/guides/migrating"
+              ]
+            }
+          ],
+          "reference": [
+            {
+              "group": "参考",
+              "pages": [
+                "zh/reference/file-layout",
+                "zh/reference/how-it-works",
+                "zh/reference/privacy-layers"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

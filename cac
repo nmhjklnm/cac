@@ -5,6 +5,7 @@ set -euo pipefail
 
 CAC_DIR="$HOME/.cac"
 ENVS_DIR="$CAC_DIR/envs"
+VERSIONS_DIR="$CAC_DIR/versions"
 
 # ━━━ utils.sh ━━━
 # ── utils: 颜色、读写、UUID、proxy 解析 ───────────────────────
@@ -12,10 +13,14 @@ ENVS_DIR="$CAC_DIR/envs"
 CAC_VERSION="1.0.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
+_die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
 _red()    { printf '\033[31m%s\033[0m' "$*"; }
 _yellow() { printf '\033[33m%s\033[0m' "$*"; }
+_cyan()   { printf '\033[36m%s\033[0m' "$*"; }
+_dim()    { printf '\033[2m%s\033[0m' "$*"; }
+_green_bold() { printf '\033[1;32m%s\033[0m' "$*"; }
 
 _detect_os() {
     case "$(uname -s)" in
@@ -26,11 +31,20 @@ _detect_os() {
     esac
 }
 
-_new_uuid()    { uuidgen | tr '[:lower:]' '[:upper:]'; }
-_new_sid()     { uuidgen | tr '[:upper:]' '[:lower:]'; }
+_gen_uuid() {
+    if command -v uuidgen &>/dev/null; then
+        uuidgen
+    elif [[ -f /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        python3 -c "import uuid; print(uuid.uuid4())"
+    fi
+}
+_new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
+_new_sid()     { _gen_uuid | tr '[:upper:]' '[:lower:]'; }
 _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())"; }
-_new_machine_id() { uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
-_new_hostname() { echo "host-$(uuidgen | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
+_new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
+_new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
 
 # 获取真实命令路径（绕过 shim）
@@ -118,10 +132,105 @@ _auto_detect_proxy() {
 _current_env()  { _read "$CAC_DIR/current"; }
 _env_dir()      { echo "$ENVS_DIR/$1"; }
 
+# ── Version management helpers ────────────────────────────────────
+
+_resolve_version() {
+    local v="$1"
+    if [[ "$v" == "latest" || -z "$v" ]]; then
+        _read "$VERSIONS_DIR/.latest" ""
+    else
+        echo "$v"
+    fi
+}
+
+_version_binary() {
+    echo "$VERSIONS_DIR/$1/claude"
+}
+
+_detect_platform() {
+    local os arch platform
+    case "$(uname -s)" in
+        Darwin) os="darwin" ;;
+        Linux)  os="linux" ;;
+        *) echo "unsupported" ; return 1 ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)   arch="x64" ;;
+        arm64|aarch64)  arch="arm64" ;;
+        *) echo "unsupported" ; return 1 ;;
+    esac
+    if [[ "$os" == "darwin" && "$arch" == "x64" ]]; then
+        [[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" == "1" ]] && arch="arm64"
+    fi
+    if [[ "$os" == "linux" ]]; then
+        if [ -f /lib/libc.musl-x86_64.so.1 ] || [ -f /lib/libc.musl-aarch64.so.1 ] || ldd /bin/ls 2>&1 | grep -q musl; then
+            platform="linux-${arch}-musl"
+        else
+            platform="linux-${arch}"
+        fi
+    else
+        platform="${os}-${arch}"
+    fi
+    echo "$platform"
+}
+
+_sha256() {
+    case "$(uname -s)" in
+        Darwin) shasum -a 256 "$1" | cut -d' ' -f1 ;;
+        *)      sha256sum "$1" | cut -d' ' -f1 ;;
+    esac
+}
+
+# Ensure a Claude Code version is installed (just-in-time, like uv)
+# Usage: _ensure_version_installed <version>
+# Resolves "latest", auto-downloads if missing, writes .latest
+_ensure_version_installed() {
+    local ver="$1"
+    ver=$(_resolve_version "$ver")
+    if [[ -z "$ver" ]]; then
+        printf "Fetching latest version ... " >&2
+        ver=$(_fetch_latest_version) || _die "failed to fetch latest version"
+        echo "$(_cyan "$ver")" >&2
+    fi
+    if [[ ! -x "$(_version_binary "$ver")" ]]; then
+        echo "Version $(_cyan "$ver") not installed, downloading ..." >&2
+        mkdir -p "$VERSIONS_DIR"
+        _download_version "$ver" || return 1
+        echo "$ver" > "$VERSIONS_DIR/.latest"
+        echo >&2
+    fi
+    echo "$ver"
+}
+
+# Count environments using a specific version
+_envs_using_version() {
+    local ver="$1" count=0
+    for env_dir in "$ENVS_DIR"/*/; do
+        [[ -d "$env_dir" ]] || continue
+        [[ "$(_read "$env_dir/version" "")" == "$ver" ]] && (( count++ )) || true
+    done
+    echo "$count"
+}
+
+# Elapsed time helper: call _timer_start, then _timer_elapsed
+_timer_start() { _TIMER_START=$(date +%s%N 2>/dev/null || date +%s); }
+_timer_elapsed() {
+    local now; now=$(date +%s%N 2>/dev/null || date +%s)
+    if [[ ${#now} -gt 10 ]]; then
+        # nanoseconds available
+        local ms=$(( (now - _TIMER_START) / 1000000 ))
+        if [[ $ms -ge 1000 ]]; then
+            printf '%d.%ds' $((ms/1000)) $(( (ms%1000)/100 ))
+        else
+            printf '%dms' "$ms"
+        fi
+    else
+        printf '%ds' $(( now - _TIMER_START ))
+    fi
+}
+
 _require_setup() {
-    [[ -f "$CAC_DIR/real_claude" ]] || {
-        echo "错误：请先运行 'cac setup'" >&2; exit 1
-    }
+    _ensure_initialized
 }
 
 _require_env() {
@@ -220,16 +329,20 @@ _remove_path_from_rc() {
 }
 
 _update_statsig() {
-    local statsig="$HOME/.claude/statsig"
+    local sid="$1"
+    local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local statsig="$config_dir/statsig"
     [[ -d "$statsig" ]] || return 0
     for f in "$statsig"/statsig.stable_id.*; do
-        [[ -f "$f" ]] && printf '"%s"' "$1" > "$f"
+        [[ -f "$f" ]] && printf '"%s"' "$sid" > "$f"
     done
 }
 
 _update_claude_json_user_id() {
     local user_id="$1"
-    local claude_json="$HOME/.claude.json"
+    local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local claude_json="$config_dir/.claude.json"
+    [[ -f "$claude_json" ]] || claude_json="$HOME/.claude.json"
     [[ -f "$claude_json" ]] || return 0
     python3 - "$claude_json" "$user_id" << 'PYEOF'
 import json, sys
@@ -240,7 +353,7 @@ d['userID'] = uid
 with open(fpath, 'w') as f:
     json.dump(d, f, indent=2, ensure_ascii=False)
 PYEOF
-    [[ $? -eq 0 ]] || echo "警告：更新 ~/.claude.json userID 失败" >&2
+    [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
 }
 
 # ━━━ dns_block.sh ━━━
@@ -508,24 +621,109 @@ if (mtlsCert && mtlsKey) {
 })();
 
 
-// ─── 4. 健康检查走 NO_PROXY（直连本地 server）─────────────────
-// wrapper 启动本地 HTTPS server + /etc/hosts，并将 api.anthropic.com
-// 加入 NO_PROXY，让健康检查绕过代理走直连 → 本地 server → 200。
-// 3 秒后从 NO_PROXY 中移除，让后续 API 调用走代理。
+// ─── 4. 健康检查 bypass（进程内拦截，精确到 URL）────────────────
+// Claude Code 启动时 ping https://api.anthropic.com/api/hello
+// Cloudflare 拦截 Node.js TLS 指纹（JA3/JA4）→ 403
+// 方案：在 Node.js 层拦截该请求，直接返回 200，不发出任何网络流量
+// 仅拦截 health check，不影响 OAuth/API 等其他请求
 
-(function healthCheckNoProxy() {
-    if (!process.env._CAC_PROXY) return;
+function isHealthCheck(url) {
+    if (!url) return false;
+    // 匹配 https://api.anthropic.com/api/hello 或带查询参数的变体
+    return /^https?:\/\/api\.anthropic\.com\/api\/hello/.test(url);
+}
 
-    // 将健康检查域名加入 NO_PROXY
-    var noProxy = process.env.NO_PROXY || '';
-    process.env.NO_PROXY = noProxy + ',api.anthropic.com';
-    if (process.env.no_proxy) process.env.no_proxy = process.env.no_proxy + ',api.anthropic.com';
+function makeHealthResponse(callback) {
+    var EventEmitter = require('events');
+    var body = '{"message":"hello"}';
 
-    // 3 秒后移除（健康检查已完成，后续 API 调用需要走代理）
-    setTimeout(function() {
-        process.env.NO_PROXY = noProxy;
-        if (process.env.no_proxy) process.env.no_proxy = (process.env.no_proxy || '').replace(',api.anthropic.com', '');
-    }, 3000);
+    // Fake IncomingMessage
+    var res = new EventEmitter();
+    res.statusCode = 200;
+    res.headers = { 'content-type': 'application/json' };
+    res.setEncoding = function() { return res; };
+
+    // Callback first (so caller attaches handlers), then emit data/end
+    if (typeof callback === 'function') {
+        process.nextTick(function() {
+            callback(res);
+            process.nextTick(function() {
+                res.emit('data', body);
+                res.emit('end');
+            });
+        });
+    } else {
+        process.nextTick(function() {
+            res.emit('data', body);
+            res.emit('end');
+        });
+    }
+
+    // Fake ClientRequest (no-op)
+    var req = new EventEmitter();
+    req.end = function() { return req; };
+    req.write = function() { return true; };
+    req.destroy = function() {};
+    req.setTimeout = function() { return req; };
+    req.on = function(ev, fn) { EventEmitter.prototype.on.call(req, ev, fn); return req; };
+    return req;
+}
+
+// 4a. 拦截 https.get / https.request
+var _origHttpsRequest = https.request;
+var _origHttpsGet = https.get;
+
+https.request = function cacHttpsRequest(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsRequest.apply(https, arguments);
+};
+
+https.get = function cacHttpsGet(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsGet.apply(https, arguments);
+};
+
+// 4b. 拦截 fetch（undici 不走 https 模块）
+(function patchHealthFetch() {
+    if (typeof globalThis === 'undefined' || typeof globalThis.fetch !== 'function') return;
+    var _prevFetch = globalThis.fetch;
+    globalThis.fetch = function cacHealthFetch(input, init) {
+        var url = '';
+        try {
+            url = typeof input === 'string' ? input : (input && input.url) ? input.url : '';
+        } catch(e) {}
+        if (isHealthCheck(url)) {
+            return Promise.resolve(new Response('{"message":"hello"}', {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            }));
+        }
+        return _prevFetch(input, init);
+    };
 })();
 DNSGUARD_EOF
     chmod 644 "$guard_file"
@@ -644,27 +842,6 @@ _generate_client_cert() {
     rm -f "$client_csr"
 }
 
-# 生成健康检查 bypass 证书（api.anthropic.com + console.anthropic.com）
-_generate_health_bypass_cert() {
-    local ca_key="$CAC_DIR/ca/ca_key.pem"
-    local ca_cert="$CAC_DIR/ca/ca_cert.pem"
-    local hb_key="$CAC_DIR/ca/hb_key.pem"
-    local hb_cert="$CAC_DIR/ca/hb_cert.pem"
-
-    [[ -f "$ca_key" ]] && [[ -f "$ca_cert" ]] || return 1
-    [[ -f "$hb_cert" ]] && [[ -f "$hb_key" ]] && return 0
-
-    openssl genrsa -out "$hb_key" 2048 2>/dev/null || return 1
-    chmod 600 "$hb_key"
-
-    openssl req -new -key "$hb_key" -subj "/CN=api.anthropic.com/O=cac" 2>/dev/null | \
-    openssl x509 -req -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
-        -days 365 -out "$hb_cert" \
-        -extfile <(printf "subjectAltName=DNS:api.anthropic.com,DNS:console.anthropic.com\nbasicConstraints=CA:FALSE") \
-        2>/dev/null || return 1
-    chmod 644 "$hb_cert"
-}
-
 # 验证 mTLS 证书状态
 _check_mtls() {
     local env_dir="$1"
@@ -726,30 +903,44 @@ _name=$(tr -d '[:space:]' < "$CAC_DIR/current")
 _env_dir="$ENVS_DIR/$_name"
 [[ -d "$_env_dir" ]] || { echo "[cac] 错误：环境 '$_name' 不存在" >&2; exit 1; }
 
-PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+# Isolated .claude config directory
+if [[ -d "$_env_dir/.claude" ]]; then
+    export CLAUDE_CONFIG_DIR="$_env_dir/.claude"
+fi
 
-# pre-flight：代理连通性（纯 bash，无 fork）
-_hp="${PROXY##*@}"; _hp="${_hp##*://}"
-_host="${_hp%%:*}"
-_port="${_hp##*:}"
-if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
-    echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
-    echo "[cac] 提示：运行 'cac check' 排查，或 'cacstop' 临时停用" >&2
-    exit 1
+# Proxy — optional: only if proxy file exists and is non-empty
+PROXY=""
+if [[ -f "$_env_dir/proxy" ]]; then
+    PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
+fi
+
+if [[ -n "$PROXY" ]]; then
+    # pre-flight：代理连通性（纯 bash，无 fork）
+    _hp="${PROXY##*@}"; _hp="${_hp##*://}"
+    _host="${_hp%%:*}"
+    _port="${_hp##*:}"
+    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+        echo "[cac] 错误：[$_name] 代理 $_hp 不通，拒绝启动。" >&2
+        echo "[cac] 提示：运行 'cac check' 排查，或 'cac stop' 临时停用" >&2
+        exit 1
+    fi
 fi
 
 # 注入 statsig stable_id
 if [[ -f "$_env_dir/stable_id" ]]; then
     _sid=$(tr -d '[:space:]' < "$_env_dir/stable_id")
-    for _f in "$HOME/.claude/statsig"/statsig.stable_id.*; do
+    _config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    for _f in "$_config_dir/statsig"/statsig.stable_id.*; do
         [[ -f "$_f" ]] && printf '"%s"' "$_sid" > "$_f"
     done
 fi
 
-# 注入环境变量 —— 代理
-export _CAC_PROXY="$PROXY"
-export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
-export NO_PROXY="localhost,127.0.0.1"
+# 注入环境变量 —— 代理（仅在配置了代理时）
+if [[ -n "$PROXY" ]]; then
+    export _CAC_PROXY="$PROXY"
+    export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
+    export NO_PROXY="localhost,127.0.0.1"
+fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── 多层环境变量遥测保护 ──
@@ -772,10 +963,13 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export TELEMETRY_DISABLED=1
 export DISABLE_TELEMETRY=1
 
-# 清除第三方 API 配置，强制走 OAuth 官方端点
-unset ANTHROPIC_BASE_URL
-unset ANTHROPIC_AUTH_TOKEN
-unset ANTHROPIC_API_KEY
+# 有代理时：强制走 OAuth（清除 API 配置防泄露）
+# 无代理时：保留用户的 API Key / Base URL
+if [[ -n "$PROXY" ]]; then
+    unset ANTHROPIC_BASE_URL
+    unset ANTHROPIC_AUTH_TOKEN
+    unset ANTHROPIC_API_KEY
+fi
 
 # ── NS 层级 DNS 拦截 ──
 if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
@@ -795,18 +989,20 @@ if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; 
         export CAC_MTLS_CA="$CAC_DIR/ca/ca_cert.pem"
         export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
     }
-    export CAC_PROXY_HOST="$_hp"
+    [[ -n "${_hp:-}" ]] && export CAC_PROXY_HOST="$_hp"
 fi
 
-# 确保 CA 证书始终被信任（健康检查 bypass 和 mTLS 都需要）
+# 确保 CA 证书始终被信任（mTLS 需要）
 [[ -f "$CAC_DIR/ca/ca_cert.pem" ]] && export NODE_EXTRA_CA_CERTS="$CAC_DIR/ca/ca_cert.pem"
 
 [[ -f "$_env_dir/tz" ]]   && export TZ=$(tr -d '[:space:]' < "$_env_dir/tz")
 [[ -f "$_env_dir/lang" ]] && export LANG=$(tr -d '[:space:]' < "$_env_dir/lang")
-[[ -f "$_env_dir/hostname" ]] && export HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
+if [[ -f "$_env_dir/hostname" ]]; then
+    _hn=$(tr -d '[:space:]' < "$_env_dir/hostname")
+    export HOSTNAME="$_hn" CAC_HOSTNAME="$_hn"
+fi
 
 # Node.js 级指纹拦截（绕过 shell shim 限制）
-[[ -f "$_env_dir/hostname" ]]    && export CAC_HOSTNAME=$(tr -d '[:space:]' < "$_env_dir/hostname")
 [[ -f "$_env_dir/mac_address" ]] && export CAC_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
 [[ -f "$_env_dir/machine_id" ]]  && export CAC_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
@@ -817,44 +1013,21 @@ if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
     esac
 fi
 
-# 执行真实 claude
-_real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
-[[ -x "$_real" ]] || { echo "[cac] 错误：$_real 不可执行，运行 'cac setup'" >&2; exit 1; }
-
-# ── 健康检查 bypass ──
-# Claude Code 启动时健康检查直连 api.anthropic.com，在代理环境下会挂起。
-# 解决：本地 HTTPS server (端口 443) + /etc/hosts 劫持，让健康检查秒过 200。
-# 需要 root 权限（Docker 中默认满足）。健康检查完成后自动清理。
-_hb_cert="$CAC_DIR/ca/hb_cert.pem"
-_hb_key="$CAC_DIR/ca/hb_key.pem"
-_hb_pid=""
-
-# 健康检查 bypass（允许失败，不影响主流程）
-if [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
-    (
-        node -e "
-        var h=require('https'),f=require('fs');
-        h.createServer({cert:f.readFileSync('$_hb_cert'),key:f.readFileSync('$_hb_key')},
-        function(q,r){r.writeHead(200,{'Content-Type':'application/json'});r.end('{\"message\":\"hello\"}')})
-        .listen(443,'127.0.0.1');
-        setTimeout(function(){process.exit()},5000);
-        " </dev/null >/dev/null 2>&1 &
-        _hb_pid=$!
-        sleep 0.5
-        echo "127.0.0.1 api.anthropic.com #cac-health-bypass" >> /etc/hosts 2>/dev/null || true
-        # 3 秒后自动清理（健康检查在 1-2 秒内完成）
-        sleep 3
-        grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
-        rm -f /tmp/_hosts_clean
-        kill "$_hb_pid" 2>/dev/null || true
-    ) &
-    _hb_cleanup_pid=$!
-    sleep 0.8
+# 执行真实 claude — versioned binary or system fallback
+_real=""
+if [[ -f "$_env_dir/version" ]]; then
+    _ver=$(tr -d '[:space:]' < "$_env_dir/version")
+    _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    [[ -x "$_ver_bin" ]] && _real="$_ver_bin"
 fi
+if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
+    _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
+fi
+[[ -x "$_real" ]] || { echo "[cac] 错误：找不到 claude，运行 'cac setup'" >&2; exit 1; }
 
-# ── Relay 本地中转（绕过 TUN）──
+# ── Relay 本地中转（有代理时始终启用）──
 _relay_active=false
-if [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
@@ -894,15 +1067,9 @@ fi
 
 # 清理函数
 _cleanup_all() {
-    # 清理 health bypass 子进程
-    [[ -n "${_hb_cleanup_pid:-}" ]] && kill "$_hb_cleanup_pid" 2>/dev/null || true
-    grep -v '#cac-health-bypass' /etc/hosts > /tmp/_hosts_clean 2>/dev/null && cp /tmp/_hosts_clean /etc/hosts 2>/dev/null || true
-    rm -f /tmp/_hosts_clean
-    # 杀掉残留的 node hello server
-    pkill -f "listen(443" 2>/dev/null || true
     # 清理 relay
-    if [[ "$_relay_active" == "true" ]]; then
-        local _p; _p=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid" 2>/dev/null || true)
+    if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
+        local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
         [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
         rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
     fi
@@ -1021,232 +1188,187 @@ IFCONFIG_EOF
 }
 
 # ━━━ cmd_setup.sh ━━━
-# ── cmd: setup ─────────────────────────────────────────────────
+# ── cmd: setup (auto-bootstrap, no manual step needed) ─────────
 
-cmd_setup() {
-    echo "=== cac setup ==="
+# Silent, idempotent initialization — called automatically by any command
+_ensure_initialized() {
+    # Already initialized?
+    [[ -f "$CAC_DIR/bin/claude" ]] && [[ -d "$ENVS_DIR" ]] && [[ -d "$VERSIONS_DIR" ]] && return 0
 
+    mkdir -p "$ENVS_DIR" "$VERSIONS_DIR"
+
+    # Find real claude (system-installed or managed)
     local real_claude
     real_claude=$(_find_real_claude)
     if [[ -z "$real_claude" ]]; then
-        echo "错误：找不到 claude 命令，请先安装 Claude CLI" >&2
-        echo "  npm install -g @anthropic-ai/claude-code" >&2
-        exit 1
+        # Check managed versions
+        local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
+        if [[ -n "$latest_ver" ]]; then
+            real_claude="$VERSIONS_DIR/$latest_ver/claude"
+        fi
     fi
-    echo "  真实 claude：$real_claude"
-
-    mkdir -p "$ENVS_DIR"
-    echo "$real_claude" > "$CAC_DIR/real_claude"
+    # If still not found, we can still initialize — env create will handle it
+    if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
+        echo "$real_claude" > "$CAC_DIR/real_claude"
+    fi
 
     local os; os=$(_detect_os)
     _write_wrapper
 
-    # 复制 Node.js 指纹钩子
-    local _hook_src
-    _hook_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fingerprint-hook.js"
-    if [[ -f "$_hook_src" ]]; then
-        cp "$_hook_src" "$CAC_DIR/fingerprint-hook.js"
-        echo "  ✓ fingerprint hook → $CAC_DIR/fingerprint-hook.js"
-    elif [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
-        echo "  ✓ fingerprint hook（已存在）"
-    else
-        echo "  ⚠ fingerprint-hook.js 未找到，Node.js 级指纹拦截不可用" >&2
-    fi
+    # Copy JS hooks from source location (build.sh puts them alongside cac)
+    local _self_dir
+    _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js"
+    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js"
 
-    # 复制 relay.js
-    local _relay_src
-    _relay_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relay.js"
-    if [[ -f "$_relay_src" ]]; then
-        cp "$_relay_src" "$CAC_DIR/relay.js"
-        echo "  ✓ relay → $CAC_DIR/relay.js"
-    elif [[ -f "$CAC_DIR/relay.js" ]]; then
-        echo "  ✓ relay（已存在）"
-    fi
-
+    # Shims
     _write_hostname_shim
     _write_ifconfig_shim
-
     if [[ "$os" == "macos" ]]; then
         _write_ioreg_shim
-        echo "  ✓ ioreg shim → $CAC_DIR/shim-bin/ioreg"
     elif [[ "$os" == "linux" ]]; then
         _write_machine_id_shim
-        echo "  ✓ machine-id shim → $CAC_DIR/shim-bin/cat"
     fi
 
-    echo "  ✓ wrapper → $CAC_DIR/bin/claude"
-    echo "  ✓ hostname shim → $CAC_DIR/shim-bin/hostname"
-    echo "  ✓ ifconfig shim → $CAC_DIR/shim-bin/ifconfig"
+    # DNS guard + blocked hosts
+    _write_dns_guard_js 2>/dev/null || true
+    _write_blocked_hosts 2>/dev/null || true
 
-    # DNS guard (NS 层级遥测拦截 + DoH)
-    _write_dns_guard_js
-    _write_blocked_hosts
-    echo "  ✓ DNS guard → $CAC_DIR/cac-dns-guard.js"
-    echo "  ✓ blocked hosts → $CAC_DIR/blocked_hosts"
+    # mTLS CA
+    _generate_ca_cert 2>/dev/null || true
 
-    # mTLS CA 证书
-    _generate_ca_cert
-    echo "  ✓ mTLS CA → $CAC_DIR/ca/ca_cert.pem"
+    # PATH (idempotent)
+    local rc_file; rc_file=$(_detect_rc_file)
+    _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
+}
 
-    # 健康检查 bypass 证书
-    if _generate_health_bypass_cert; then
-        echo "  ✓ health bypass cert → $CAC_DIR/ca/hb_cert.pem"
-    fi
-
-    # 自动写入 PATH 到 shell rc 文件
-    local rc_file
-    rc_file=$(_detect_rc_file)
-    _write_path_to_rc "$rc_file"
-
+# Explicit setup command — runs initialization with verbose output
+cmd_setup() {
+    echo "$(_bold "cac setup")"
     echo
-    echo "── 下一步 ──────────────────────────────────────────────"
+
+    _ensure_initialized
+
+    # Find or install Claude Code
+    local real_claude; real_claude=$(_read "$CAC_DIR/real_claude" "")
+    if [[ -z "$real_claude" ]] || [[ ! -x "$real_claude" ]]; then
+        echo "  Claude Code not found"
+        printf "  Install latest version? [Y/n] "
+        read -r _ans
+        if [[ "$_ans" != "n" && "$_ans" != "N" ]]; then
+            _claude_cmd_install latest
+            local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
+            if [[ -n "$latest_ver" ]]; then
+                real_claude="$VERSIONS_DIR/$latest_ver/claude"
+                echo "$real_claude" > "$CAC_DIR/real_claude"
+            fi
+        fi
+    fi
+
+    if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
+        echo "  Claude Code: $(_cyan "$real_claude")"
+    fi
+    echo "  Wrapper: $(_cyan "$CAC_DIR/bin/claude")"
+    echo "  Shims: $(_cyan "$CAC_DIR/shim-bin/")"
+    echo
+
+    local rc_file; rc_file=$(_detect_rc_file)
     if [[ -n "$rc_file" ]]; then
-        echo "1. 执行以下命令使配置生效（或重开终端）："
-        echo "   source $rc_file"
+        echo "  Run to activate: $(_green "source $rc_file")"
     fi
     echo
-    echo "2. 添加第一个代理环境："
-    echo "   cac add <名字> <host:port:user:pass>"
+    echo "  Create environment: $(_green "cac env create <name> [-p <proxy>]")"
 }
 
 # ━━━ cmd_env.sh ━━━
-# ── cmd: add / switch / ls ─────────────────────────────────────
+# ── cmd: env (environment management, like "uv venv") ────────────
 
-cmd_add() {
+_env_cmd_create() {
     _require_setup
-    if [[ $# -lt 2 ]]; then
-        echo "用法：cac add <名字> <host:port:user:pass>" >&2
-        echo "示例：cac add us1 1.2.3.4:1080:username:password" >&2
-        exit 1
-    fi
+    local name="" proxy="" claude_ver="" env_type="local"
 
-    local name="$1" raw_proxy="$2"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
+            -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
+            --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
+            -*)          _die "unknown option: $1" ;;
+            *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
+        esac
+    done
+
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--type local|container]"
+    [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
+
     local env_dir="$ENVS_DIR/$name"
+    [[ -d "$env_dir" ]] && _die "environment $(_cyan "'$name'") already exists"
 
-    if [[ -d "$env_dir" ]]; then
-        echo "错误：环境 '$name' 已存在，用 'cac ls' 查看" >&2
-        exit 1
+    _timer_start
+
+    # Auto-install version (just-in-time, like uv)
+    if [[ -n "$claude_ver" ]]; then
+        claude_ver=$(_ensure_version_installed "$claude_ver") || exit 1
     fi
 
-    local proxy
-    # 如果用户未指定协议，自动探测 http/socks5/https
-    if [[ ! "$raw_proxy" =~ ^(http|https|socks5):// ]]; then
-        printf "  自动检测代理协议 ... "
-        if proxy=$(_auto_detect_proxy "$raw_proxy"); then
-            echo "$(_green "$(echo "$proxy" | grep -oE '^[a-z]+')://")"
+    # Auto-detect proxy protocol
+    local proxy_url=""
+    if [[ -n "$proxy" ]]; then
+        if [[ ! "$proxy" =~ ^(http|https|socks5):// ]]; then
+            printf "Detecting proxy protocol ... "
+            if proxy_url=$(_auto_detect_proxy "$proxy"); then
+                echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
+            else
+                echo "$(_yellow "failed, defaulting to http")"
+            fi
         else
-            echo "$(_yellow "检测失败，使用默认 http://")"
+            proxy_url=$(_parse_proxy "$proxy")
         fi
-    else
-        proxy=$(_parse_proxy "$raw_proxy")
     fi
 
-    echo "即将创建环境：$(_bold "$name")"
-    echo "  代理：$proxy"
-    echo
-
-    printf "  检测代理 ... "
-    if _proxy_reachable "$proxy"; then
-        echo "$(_green "✓ 可达")"
-    else
-        echo "$(_red "✗ 不通")"
-        echo "  警告：代理当前不可达（代理客户端可能未启动）"
-    fi
-
-    # 自动检测出口 IP 的时区和语言
-    printf "  检测时区 ... "
-    local exit_ip tz lang
-    exit_ip=$(curl -s --proxy "$proxy" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$exit_ip" ]]; then
+    # Geo-detect timezone (single request via proxy)
+    local tz="America/New_York" lang="en_US.UTF-8"
+    if [[ -n "$proxy_url" ]]; then
+        printf "Detecting timezone ... "
         local ip_info
-        ip_info=$(curl -s --connect-timeout 8 "http://ip-api.com/json/${exit_ip}?fields=timezone,countryCode" 2>/dev/null || true)
-        tz=$(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''))" 2>/dev/null || true)
-        country=$(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('countryCode',''))" 2>/dev/null || true)
-        [[ -z "$tz" ]] && tz="America/New_York"
-        [[ "$country" == "US" || "$country" == "GB" || "$country" == "AU" || "$country" == "CA" ]] && lang="en_US.UTF-8" || lang="en_US.UTF-8"
-        echo "$(_green "✓ $tz")"
-    else
-        tz="America/New_York"
-        lang="en_US.UTF-8"
-        echo "$(_yellow "⚠ 获取失败，默认 $tz")"
+        ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
+        if [[ -n "$ip_info" ]]; then
+            local detected_tz
+            detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+            [[ -n "$detected_tz" ]] && tz="$detected_tz"
+            echo "$(_cyan "$tz")"
+        else
+            echo "$(_dim "default $tz")"
+        fi
     fi
-    echo
-
-    printf "确认创建？[yes/N] "
-    read -r confirm
-    [[ "$confirm" == "yes" ]] || { echo "已取消。"; exit 0; }
 
     mkdir -p "$env_dir"
-    echo "$proxy"            > "$env_dir/proxy"
-    echo "$(_new_uuid)"      > "$env_dir/uuid"
-    echo "$(_new_sid)"       > "$env_dir/stable_id"
-    echo "$(_new_user_id)"   > "$env_dir/user_id"
+    [[ -n "$proxy_url" ]] && echo "$proxy_url" > "$env_dir/proxy"
+    echo "$(_new_uuid)"       > "$env_dir/uuid"
+    echo "$(_new_sid)"        > "$env_dir/stable_id"
+    echo "$(_new_user_id)"    > "$env_dir/user_id"
     echo "$(_new_machine_id)" > "$env_dir/machine_id"
-    echo "$(_new_hostname)"  > "$env_dir/hostname"
-    echo "$(_new_mac)"       > "$env_dir/mac_address"
-    echo "$tz"               > "$env_dir/tz"
-    echo "$lang"             > "$env_dir/lang"
+    echo "$(_new_hostname)"   > "$env_dir/hostname"
+    echo "$(_new_mac)"        > "$env_dir/mac_address"
+    echo "$tz"                > "$env_dir/tz"
+    echo "$lang"              > "$env_dir/lang"
+    [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
+    echo "$env_type"          > "$env_dir/type"
+    mkdir -p "$env_dir/.claude"
 
-    # 生成 mTLS 客户端证书
-    printf "  生成 mTLS 证书 ... "
-    if _generate_client_cert "$name"; then
-        echo "$(_green "✓")"
-    else
-        echo "$(_yellow "⚠ 跳过")"
-    fi
+    _generate_client_cert "$name" >/dev/null 2>&1 || true
 
+    local elapsed; elapsed=$(_timer_elapsed)
+    echo "$(_green_bold "Created") environment $(_cyan "$name") $(_dim "in $elapsed")"
+    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy: $proxy_url"
+    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude: $(_cyan "$claude_ver")"
+    echo "  $(_green "+") type: $env_type"
     echo
-    echo "$(_green "✓") 环境 '$(_bold "$name")' 已创建"
-    echo "  UUID     ：$(cat "$env_dir/uuid")"
-    echo "  stable_id：$(cat "$env_dir/stable_id")"
-    echo "  mTLS     ：$([ -f "$env_dir/client_cert.pem" ] && echo "已配置" || echo "未配置")"
-    echo "  TZ       ：$tz"
-    echo "  LANG     ：$lang"
-    echo
-    echo "切换到该环境：cac $name"
+    echo "Activate with: $(_green "cac $name")"
 }
 
-cmd_switch() {
-    _require_setup
-    local name="$1"
-    _require_env "$name"
-
-    local proxy; proxy=$(_read "$ENVS_DIR/$name/proxy")
-
-    printf "检测 [%s] 代理 ... " "$name"
-    if _proxy_reachable "$proxy"; then
-        echo "$(_green "✓ 可达")"
-    else
-        echo "$(_yellow "⚠ 不通")"
-        echo "警告：代理不可达，仍切换（启动 claude 时会拦截）"
-    fi
-
-    echo "$name" > "$CAC_DIR/current"
-    rm -f "$CAC_DIR/stopped"
-
-    _update_statsig "$(_read "$ENVS_DIR/$name/stable_id")"
-    _update_claude_json_user_id "$(_read "$ENVS_DIR/$name/user_id")"
-
-    # Relay 生命周期：切换环境时重启 relay
-    _relay_stop 2>/dev/null || true
-    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
-        printf "  启动 relay ... "
-        if _relay_start "$name"; then
-            local rport; rport=$(_read "$CAC_DIR/relay.port")
-            echo "$(_green "✓") 127.0.0.1:$rport"
-        else
-            echo "$(_yellow "⚠ 启动失败，claude 启动时会重试")"
-        fi
-    fi
-
-    echo "$(_green "✓") 已切换到 $(_bold "$name")"
-}
-
-cmd_ls() {
-    _require_setup
-
+_env_cmd_ls() {
     if [[ ! -d "$ENVS_DIR" ]] || [[ -z "$(ls -A "$ENVS_DIR" 2>/dev/null)" ]]; then
-        echo "（暂无环境，用 'cac add <名字> <proxy>' 添加）"
+        echo "$(_dim "(no environments — create with 'cac env create <name>')")"
         return
     fi
 
@@ -1255,16 +1377,97 @@ cmd_ls() {
     [[ -f "$CAC_DIR/stopped" ]] && stopped_tag=" $(_red "[stopped]")"
 
     for env_dir in "$ENVS_DIR"/*/; do
+        [[ -d "$env_dir" ]] || continue
         local name; name=$(basename "$env_dir")
-        local proxy; proxy=$(_read "$env_dir/proxy" "（未配置）")
+        local proxy; proxy=$(_read "$env_dir/proxy" "")
+        local ver; ver=$(_read "$env_dir/version" "system")
+        local etype; etype=$(_read "$env_dir/type" "local")
+
         if [[ "$name" == "$current" ]]; then
             printf "  %s %s%s\n" "$(_green "▶")" "$(_bold "$name")" "$stopped_tag"
-            printf "    %s\n" "$proxy"
         else
             printf "    %s\n" "$name"
-            printf "    %s\n" "$proxy"
         fi
+        local details="claude: $(_cyan "$ver")  type: $etype"
+        [[ -n "$proxy" ]] && details="proxy: $proxy  $details"
+        printf "      %s\n" "$details"
     done
+}
+
+_env_cmd_rm() {
+    [[ -n "${1:-}" ]] || _die "usage: cac env rm <name>"
+    local name="$1"
+    _require_env "$name"
+
+    local current; current=$(_current_env)
+    [[ "$name" != "$current" ]] || _die "cannot remove active environment $(_cyan "'$name'")\n  switch to another environment first"
+
+    rm -rf "$ENVS_DIR/$name"
+    echo "$(_green_bold "Removed") environment $(_cyan "$name")"
+}
+
+_env_cmd_activate() {
+    _require_setup
+    local name="$1"
+    _require_env "$name"
+
+    _timer_start
+
+    echo "$name" > "$CAC_DIR/current"
+    rm -f "$CAC_DIR/stopped"
+
+    if [[ -d "$ENVS_DIR/$name/.claude" ]]; then
+        export CLAUDE_CONFIG_DIR="$ENVS_DIR/$name/.claude"
+    fi
+
+    _update_statsig "$(_read "$ENVS_DIR/$name/stable_id")"
+    _update_claude_json_user_id "$(_read "$ENVS_DIR/$name/user_id")"
+
+    # Relay lifecycle
+    _relay_stop 2>/dev/null || true
+    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
+        if _relay_start "$name" 2>/dev/null; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port")
+            echo "  $(_green "+") relay: 127.0.0.1:$rport"
+        fi
+    fi
+
+    local elapsed; elapsed=$(_timer_elapsed)
+    echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
+}
+
+_env_cmd_deactivate() {
+    if [[ ! -f "$CAC_DIR/current" ]]; then
+        echo "$(_dim "no active environment")"
+        return
+    fi
+    local current; current=$(_current_env)
+    rm -f "$CAC_DIR/current"
+    touch "$CAC_DIR/stopped"
+    _relay_stop 2>/dev/null || true
+    echo "$(_green_bold "Deactivated") $(_bold "$current") — claude runs unprotected"
+}
+
+cmd_env() {
+    case "${1:-help}" in
+        create)       _env_cmd_create "${@:2}" ;;
+        ls|list)      _env_cmd_ls ;;
+        rm|remove)    _env_cmd_rm "${@:2}" ;;
+        activate)     _env_cmd_activate "${@:2}" ;;
+        deactivate)   _env_cmd_deactivate ;;
+        check)        cmd_check ;;
+        help|-h|--help)
+            echo "$(_bold "cac env") — environment management"
+            echo
+            echo "  $(_bold "create") <name> [-p <proxy>] [-c <ver>] [--type local|container]"
+            echo "  $(_bold "ls")              List all environments"
+            echo "  $(_bold "rm") <name>       Remove an environment"
+            echo "  $(_bold "activate") <name> Activate (shortcut: cac <name>)"
+            echo "  $(_bold "deactivate")      Deactivate — claude runs unprotected"
+            echo "  $(_bold "check")           Verify current environment"
+            ;;
+        *) _die "unknown: cac env $1" ;;
+    esac
 }
 
 # ━━━ cmd_relay.sh ━━━
@@ -1582,59 +1785,72 @@ cmd_check() {
     fi
 
     local env_dir="$ENVS_DIR/$current"
-    local proxy; proxy=$(_read "$env_dir/proxy")
+    local proxy; proxy=$(_read "$env_dir/proxy" "")
 
     echo "当前环境：$(_bold "$current")"
-    echo "  代理      ：$proxy"
+    echo "  代理      ：${proxy:-（无代理）}"
     echo "  UUID      ：$(_read "$env_dir/uuid")"
     echo "  stable_id ：$(_read "$env_dir/stable_id")"
     echo "  user_id   ：$(_read "$env_dir/user_id" "（旧环境，无此字段）")"
+    echo "  版本      ：$(_read "$env_dir/version" "system")"
     echo "  TZ        ：$(_read "$env_dir/tz" "（未设置）")"
     echo "  LANG      ：$(_read "$env_dir/lang" "（未设置）")"
     echo
 
-    # ── 网络连通性 ──
-    printf "  TCP 连通  ... "
-    if ! _proxy_reachable "$proxy"; then
-        echo "$(_red "✗ 不通")"; return
-    fi
-    echo "$(_green "✓")"
+    # ── 网络连通性（仅在有代理时检查）──
+    if [[ -n "$proxy" ]]; then
+        printf "  TCP 连通  ... "
+        if ! _proxy_reachable "$proxy"; then
+            echo "$(_red "✗ 不通")"; return
+        fi
+        echo "$(_green "✓")"
 
-    printf "  出口 IP   ... "
-    local proxy_ip
-    proxy_ip=$(curl -s --proxy "$proxy" \
-         --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$proxy_ip" ]]; then
-        echo "$(_green "$proxy_ip")"
+        printf "  出口 IP   ... "
+        local proxy_ip
+        proxy_ip=$(curl -s --proxy "$proxy" \
+             --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+        if [[ -n "$proxy_ip" ]]; then
+            echo "$(_green "$proxy_ip")"
+        else
+            echo "$(_yellow "获取失败")"
+        fi
     else
-        echo "$(_yellow "获取失败")"
+        echo "  $(_dim "（无代理，跳过网络检查）")"
     fi
 
-    # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
-    echo
-    echo "── 冲突检测 ────────────────────────────────────────────"
-    printf "  代理冲突  ... "
-    _check_proxy_conflict "$proxy" "$proxy_ip"
+    # ── 本地代理冲突检测（仅在有代理时）──
+    if [[ -n "$proxy" ]]; then
+        echo
+        echo "── 冲突检测 ────────────────────────────────────────────"
+        printf "  代理冲突  ... "
+        _check_proxy_conflict "$proxy" "${proxy_ip:-}"
+    fi
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"
-    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
-        printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
-        if _relay_is_running; then
-            local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
-            local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
-            printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    if _relay_is_running; then
+        local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
+        local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
+        printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    elif [[ -n "$proxy" ]]; then
+        # 有代理时临时启动 relay 做连通性测试
+        printf "  Relay 测试 ... "
+        if _relay_start "$current" 2>/dev/null; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+            local relay_ip
+            relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+            if [[ -n "$relay_ip" ]]; then
+                printf "%s (端口=%s, 出口=%s)\n" "$(_green "✓ 连通")" "$rport" "$(_cyan "$relay_ip")"
+            else
+                printf "%s (端口=%s, 代理不通)\n" "$(_yellow "⚠ 启动成功但无法连通")" "$rport"
+            fi
+            _relay_stop 2>/dev/null || true
         else
-            printf "  Relay 进程 ... %s\n" "$(_yellow "未启动（将在 claude 启动时自动启动）")"
+            printf "%s\n" "$(_red "✗ 启动失败")"
         fi
-        if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
-            printf "  直连路由   ... %s\n" "$(_read "$CAC_DIR/relay_route_ip")"
-        fi
+        echo "  $(_dim "（relay 将在 claude 启动时自动启用）")"
     else
-        echo "  Relay 模式 ... 未启用"
-        if _detect_tun_active 2>/dev/null; then
-            echo "    $(_yellow "⚠") 检测到 TUN 模式，建议运行 'cac relay on' 绕过冲突"
-        fi
+        echo "  Relay     ... $(_dim "（无代理，不需要 relay）")"
     fi
 
     echo
@@ -1682,9 +1898,8 @@ cmd_check() {
 
 cmd_stop() {
     touch "$CAC_DIR/stopped"
-    local current; current=$(_current_env)
-    echo "$(_yellow "⚠ cac 已停用") — claude 将裸跑（无代理、无伪装）"
-    echo "  恢复：cac -c"
+    echo "$(_yellow "⚠ cac stopped") — claude runs unprotected"
+    echo "  Resume: cac resume"
 }
 
 cmd_continue() {
@@ -1700,6 +1915,217 @@ cmd_continue() {
 
     rm -f "$CAC_DIR/stopped"
     echo "$(_green "✓") cac 已恢复 — 当前环境：$(_bold "$current")"
+}
+
+# ━━━ cmd_claude.sh ━━━
+# ── cmd: claude (version management, like "uv python") ──────────
+
+_GCS_BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+
+_download_version() {
+    local ver="$1"
+    local platform; platform=$(_detect_platform) || _die "unsupported platform"
+    local dest_dir="$VERSIONS_DIR/$ver"
+    local dest="$dest_dir/claude"
+
+    if [[ -x "$dest" ]]; then
+        echo "  Already installed: $(_cyan "$ver")"
+        return 0
+    fi
+
+    mkdir -p "$dest_dir"
+    _timer_start
+
+    printf "  Downloading manifest ... "
+    local manifest
+    manifest=$(curl -fsSL "$_GCS_BUCKET/$ver/manifest.json" 2>/dev/null) || {
+        echo "$(_red "failed")"
+        rm -rf "$dest_dir"
+        _die "version $(_cyan "$ver") not found or network unreachable"
+    }
+    echo "done"
+
+    local checksum=""
+    checksum=$(echo "$manifest" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('platforms',{}).get(sys.argv[1],{}).get('checksum',''))
+" "$platform" 2>/dev/null || true)
+
+    if [[ -z "$checksum" ]] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
+        rm -rf "$dest_dir"
+        _die "platform $(_cyan "$platform") not in manifest"
+    fi
+
+    echo "  Downloading $(_cyan "claude $ver") ($(_dim "$platform"))"
+    if ! curl -fL --progress-bar -o "$dest" "$_GCS_BUCKET/$ver/$platform/claude" 2>&1; then
+        rm -rf "$dest_dir"
+        _die "download failed"
+    fi
+
+    printf "  Verifying SHA256 checksum ... "
+    local actual; actual=$(_sha256 "$dest")
+    if [[ "$actual" != "$checksum" ]]; then
+        echo "$(_red "failed")"
+        rm -rf "$dest_dir"
+        _die "checksum mismatch (expected: $checksum, actual: $actual)"
+    fi
+    echo "done"
+
+    chmod +x "$dest"
+    echo "$ver" > "$dest_dir/.version"
+    local elapsed; elapsed=$(_timer_elapsed)
+    echo "$(_green_bold "Installed") Claude Code $(_cyan "$ver") $(_dim "in $elapsed")"
+}
+
+_fetch_latest_version() {
+    curl -fsSL "$_GCS_BUCKET/latest" 2>/dev/null
+}
+
+_claude_cmd_install() {
+    local target="${1:-latest}"
+    local ver
+    if [[ "$target" == "latest" ]]; then
+        printf "Fetching latest version ... "
+        ver=$(_fetch_latest_version) || _die "failed to fetch latest version"
+        echo "$(_cyan "$ver")"
+    else
+        ver="$target"
+    fi
+
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]] || \
+        _die "invalid version $(_cyan "'$ver'")"
+
+    mkdir -p "$VERSIONS_DIR"
+    if _download_version "$ver"; then
+        echo "$ver" > "$VERSIONS_DIR/.latest"
+        echo
+        echo "  Bind to environment: $(_cyan "cac env create <name> -c $ver")"
+    fi
+}
+
+_claude_cmd_uninstall() {
+    [[ -n "${1:-}" ]] || _die "missing version\n  usage: cac claude uninstall <version>"
+    local ver="$1"
+    [[ -d "$VERSIONS_DIR/$ver" ]] || _die "version $(_cyan "$ver") not installed"
+
+    local count; count=$(_envs_using_version "$ver")
+    [[ "$count" -eq 0 ]] || _die "version $(_cyan "$ver") in use by $count environment(s)"
+
+    rm -rf "$VERSIONS_DIR/$ver"
+    echo "$(_green_bold "Uninstalled") Claude Code $(_cyan "$ver")"
+}
+
+_claude_cmd_ls() {
+    echo "$(_bold "Installed Claude Code versions:")"
+    echo
+
+    if [[ ! -d "$VERSIONS_DIR" ]] || [[ -z "$(ls -A "$VERSIONS_DIR" 2>/dev/null)" ]]; then
+        echo "  $(_dim "(none — install with 'cac claude install')")"
+        return
+    fi
+
+    local latest; latest=$(_read "$VERSIONS_DIR/.latest" "")
+    for ver_dir in "$VERSIONS_DIR"/*/; do
+        [[ -d "$ver_dir" ]] || continue
+        local ver; ver=$(basename "$ver_dir")
+        local tag=""; [[ "$ver" == "$latest" ]] && tag=" $(_green "(latest)")"
+        local count; count=$(_envs_using_version "$ver")
+        local usage=""; [[ "$count" -gt 0 ]] && usage=" $(_dim "— $count environment(s)")"
+        printf "  %s%s%s\n" "$(_cyan "$ver")" "$tag" "$usage"
+    done
+
+    local sys; sys=$(_read "$CAC_DIR/real_claude" "")
+    if [[ -n "$sys" ]] && [[ -x "$sys" ]]; then
+        local sv; sv=$("$sys" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "?")
+        echo
+        echo "  System: $(_cyan "$sys") ($(_dim "$sv"))"
+    fi
+}
+
+_claude_cmd_pin() {
+    [[ -n "${1:-}" ]] || _die "missing version\n  usage: cac claude pin <version>"
+    local ver="$1"
+    ver=$(_resolve_version "$ver")
+    [[ -x "$(_version_binary "$ver")" ]] || _die "version $(_cyan "$ver") not installed"
+
+    local current; current=$(_current_env)
+    [[ -n "$current" ]] || _die "no active environment"
+
+    echo "$ver" > "$ENVS_DIR/$current/version"
+    echo "$(_green_bold "Pinned") $(_bold "$current") -> Claude Code $(_cyan "$ver")"
+}
+
+cmd_claude() {
+    case "${1:-help}" in
+        install)    _claude_cmd_install "${@:2}" ;;
+        uninstall)  _claude_cmd_uninstall "${@:2}" ;;
+        ls|list)    _claude_cmd_ls ;;
+        pin)        _claude_cmd_pin "${@:2}" ;;
+        help|-h|--help)
+            echo "$(_bold "cac claude") — Claude Code version management"
+            echo
+            echo "  $(_bold "install") [latest|<ver>]  Install a Claude Code version"
+            echo "  $(_bold "uninstall") <ver>         Remove an installed version"
+            echo "  $(_bold "ls")                      List installed versions"
+            echo "  $(_bold "pin") <ver>               Pin current environment to a version"
+            ;;
+        *) _die "unknown: cac claude $1" ;;
+    esac
+}
+
+# ━━━ cmd_self.sh ━━━
+# ── cmd: self (cac self-management, like "uv self") ──────────────
+
+_SELF_REPO="https://raw.githubusercontent.com/nmhjklnm/cac/master"
+
+_self_cmd_update() {
+    local method; method=$(_install_method)
+
+    echo "Updating cac ..."
+    _timer_start
+
+    case "$method" in
+        npm)
+            echo "  Install method: $(_cyan "npm")"
+            npm update -g claude-cac 2>&1 || _die "npm update failed"
+            ;;
+        bash)
+            echo "  Install method: $(_cyan "bash")"
+            local bin_dir="$HOME/bin"
+            mkdir -p "$bin_dir"
+            echo "  Downloading latest cac"
+            if curl -fL --progress-bar -o "$bin_dir/cac.tmp" "$_SELF_REPO/cac" 2>&1; then
+                chmod +x "$bin_dir/cac.tmp"
+                mv "$bin_dir/cac.tmp" "$bin_dir/cac"
+            else
+                rm -f "$bin_dir/cac.tmp"
+                _die "download failed"
+            fi
+            # Regenerate wrapper and shims from new binary
+            _ensure_initialized
+            ;;
+        *)
+            _die "unknown install method\n  Reinstall with: curl -fsSL $_SELF_REPO/install.sh | bash"
+            ;;
+    esac
+
+    local elapsed; elapsed=$(_timer_elapsed)
+    echo "$(_green_bold "Updated") cac $(_dim "in $elapsed")"
+}
+
+cmd_self() {
+    case "${1:-help}" in
+        update)          _self_cmd_update ;;
+        delete|remove)   cmd_delete ;;
+        help|-h|--help)
+            echo "$(_bold "cac self") — cac self-management"
+            echo
+            echo "  $(_bold "update")    Update cac to the latest version"
+            echo "  $(_bold "delete")    Uninstall cac completely"
+            ;;
+        *) _die "unknown: cac self $1" ;;
+    esac
 }
 
 # ━━━ cmd_docker.sh ━━━
@@ -2282,64 +2708,40 @@ cmd_version() {
 
 cmd_help() {
 cat <<EOF
-$(_bold "cac") — Claude Anti-fingerprint Cloak
+$(_bold "cac") — Isolate, protect, and manage your Claude Code
 
-$(_bold "用法：")
-  cac setup                         首次安装（自动配置 PATH）
-  cac add <名字> <host:port:u:p>    添加新环境（需要 yes 确认）
-  cac <名字>                        切换到指定环境
-  cac ls                            列出所有环境
-  cac check                         核查当前环境（代理 + 安全防护）
-  cac relay [on|off|status]          本地中转（绕过 TUN）
-  cac stop                          临时停用，claude 裸跑
-  cac -c                            恢复停用
-  cac delete                        卸载 cac（清除所有数据和配置）
-  cac -v                            查看版本号和安装方式
+$(_bold "cac claude") — version management
+  install [latest|<ver>]   Install a Claude Code version
+  uninstall <ver>           Remove an installed version
+  ls                        List installed versions
+  pin <ver>                 Pin current environment to a version
 
-$(_bold "代理格式：")
-  host:port:user:pass    带认证的 SOCKS5
-  host:port              无认证的 SOCKS5
+$(_bold "cac env") — environment management
+  create <name> [-p <proxy>] [-c <ver>] [--type local|container]
+  ls                        List all environments
+  rm <name>                 Remove an environment
+  activate <name>           Activate (shortcut: cac <name>)
+  deactivate                Deactivate — claude runs unprotected
+  check                     Verify current environment
 
-$(_bold "Relay 中转：")
-  cac relay on              启用本地中转（绕过 TUN/Clash 等代理冲突）
-  cac relay on --route      启用 + 添加直连路由（需 sudo，解决激进 TUN）
-  cac relay off             停用
-  cac relay status          查看状态
+$(_bold "cac self") — self-management
+  update                    Update cac to the latest version
+  delete                    Uninstall cac completely
 
-$(_bold "安全防护：")
-  NS 层级 DNS 拦截       拦截 statsig.anthropic.com 等遥测域名
-  fetch 遥测拦截         替换原生 fetch，防止绕过 DNS 拦截
-  多层环境变量保护       DO_NOT_TRACK / OTEL_SDK_DISABLED 等 12 层遥测阻断
-  mTLS 客户端证书        自签 CA + 客户端证书 + https.globalAgent 注入
+$(_bold "cac docker") — containerized mode
+  setup|start|enter|check|port|stop|help
 
-$(_bold "Docker 容器模式：")
-  cac docker setup              配置代理 + 网络（交互式）
-  cac docker create             拉取 Docker 镜像
-  cac docker start              启动容器
-  cac docker enter              进入容器（claude + cac 可用）
-  cac docker check              网络 + 身份诊断
-  cac docker port <端口>         端口转发到 localhost
-  cac docker stop               停止容器
-  cac docker help               查看所有 docker 子命令
+$(_bold "Shortcuts:")
+  cac <name>                = cac env activate <name>
+  cac ls                    = cac env ls
 
-$(_bold "示例：")
-  cac add us1 1.2.3.4:1080:username:password
-  cac us1
-  cac check
-  cac stop
-  cac docker setup && cac docker start && cac docker enter
-
-$(_bold "文件目录：")
-  ~/.cac/bin/claude           wrapper（拦截所有 claude 调用）
-  ~/.cac/shim-bin/            ioreg / hostname / ifconfig shim
-  ~/.cac/cac-dns-guard.js     NS 层级 DNS 拦截 + DoH + mTLS 注入模块
-  ~/.cac/blocked_hosts        HOSTALIASES 遥测域名拦截
-  ~/.cac/ca/                  mTLS 自签 CA 证书
-  ~/.cac/current              当前激活的环境名
-  ~/.cac/relay.js                relay 本地中转服务
-  ~/.cac/relay.pid               relay 进程 PID
-  ~/.cac/relay.port              relay 监听端口
-  ~/.cac/envs/<name>/         各环境：proxy / uuid / stable_id / client_cert
+$(_bold "Examples:")
+  cac claude install latest
+  cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81
+  cac env create personal
+  cac work
+  cac env deactivate
+  cac env check
 EOF
 }
 
@@ -2349,17 +2751,21 @@ EOF
 [[ $# -eq 0 ]] && { cmd_help; exit 0; }
 
 case "$1" in
-    setup)              cmd_setup         ;;
-    add)                cmd_add  "${@:2}" ;;
-    ls|list)            cmd_ls            ;;
-    check)              cmd_check         ;;
-    stop)               cmd_stop          ;;
-    -c)                 cmd_continue      ;;
-    relay)              cmd_relay "${@:2}" ;;
+    env)                cmd_env    "${@:2}" ;;
+    claude)             cmd_claude "${@:2}" ;;
+    self)               cmd_self   "${@:2}" ;;
     docker)             cmd_docker "${@:2}" ;;
-    delete|uninstall)   cmd_delete        ;;
-    -v|--version)       cmd_version       ;;
-    help|--help|-h)     cmd_help          ;;
-    *)                  cmd_switch "$1"   ;;
+    ls|list)            _env_cmd_ls         ;;
+    -v|--version)       cmd_version         ;;
+    help|--help|-h)     cmd_help            ;;
+    # ── deprecated (shims with warnings) ──
+    add)                echo "$(_yellow "warning:") 'cac add' → 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
+    setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes" >&2 ;;
+    check)              echo "$(_yellow "warning:") 'cac check' → 'cac env check'" >&2; cmd_check ;;
+    stop)               echo "$(_yellow "warning:") 'cac stop' → 'cac env deactivate'" >&2; _env_cmd_deactivate ;;
+    resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
+    relay)              echo "$(_yellow "warning:") relay is now automatic (TUN auto-detected)" >&2 ;;
+    delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;
+    *)                  _env_cmd_activate "$1" ;;
 esac
 

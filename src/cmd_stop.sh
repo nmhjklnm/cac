@@ -2,9 +2,8 @@
 
 cmd_stop() {
     touch "$CAC_DIR/stopped"
-    local current; current=$(_current_env)
-    echo "$(_yellow "⚠ cac 已停用") — claude 将裸跑（无代理、无伪装）"
-    echo "  恢复：cac -c"
+    echo "$(_yellow "⚠ cac stopped") — claude runs unprotected"
+    echo "  Resume: cac resume"
 }
 
 cmd_continue() {

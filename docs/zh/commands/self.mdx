@@ -1,0 +1,31 @@
+---
+title: "cac self"
+sidebarTitle: "self"
+description: "更新或卸载 cac 自身。"
+icon: "gear"
+---
+
+## update
+
+将 cac 更新到最新版本。自动检测安装方式。
+
+```bash
+cac self update
+```
+
+| 安装方式 | 执行操作 |
+|:---|:---|
+| npm | 运行 `npm update -g claude-cac` |
+| bash | 从 GitHub 下载最新二进制文件，重新生成包装器和代理脚本 |
+
+## delete
+
+完全卸载 cac。移除 `~/.cac/`、shell rc 文件中的 PATH 条目以及所有托管数据。
+
+```bash
+cac self delete
+```
+
+<Danger>
+此操作会移除所有环境、已安装的 Claude Code 版本、证书和配置。此操作不可撤销。
+</Danger>

@@ -1,0 +1,51 @@
+---
+title: "Proxy setup"
+description: "Configure proxies with auto-detection, SOCKS5, and share links."
+icon: "globe"
+---
+
+## Proxy formats
+
+cac supports multiple proxy formats. Pass them with the `-p` flag:
+
+```bash
+cac env create work -p 1.2.3.4:1080:user:pass
+cac env create work -p socks5://user:pass@1.2.3.4:1080
+cac env create work -p http://1.2.3.4:8080
+```
+
+| Format | Example |
+|:---|:---|
+| Compact with auth | `1.2.3.4:1080:user:pass` |
+| Compact without auth | `1.2.3.4:1080` |
+| Explicit SOCKS5 | `socks5://user:pass@host:port` |
+| Explicit HTTP | `http://host:port` |
+| Explicit HTTPS | `https://host:port` |
+
+## Protocol auto-detection
+
+When you use the compact format (`host:port:user:pass`), cac automatically probes the proxy to detect the protocol:
+
+1. Try HTTP
+2. Try SOCKS5
+3. Try HTTPS
+4. Fall back to HTTP if all fail
+
+## TUN conflicts
+
+If you run TUN-mode proxy software (Clash, Surge, sing-box, V2Ray), it captures all traffic — including cac's proxy connections. This creates a double-proxy loop.
+
+cac handles this automatically: when it detects a TUN interface (`tun*` or `utun*`), it starts a local TCP relay on `127.0.0.1`. Loopback traffic bypasses TUN, so the relay connects directly to your remote proxy.
+
+```
+claude ──► wrapper ──► relay (127.0.0.1) ──► remote proxy ──► API
+                        ↑ loopback bypasses TUN
+```
+
+No manual configuration needed.
+
+## Health check bypass
+
+Claude Code pings `api.anthropic.com` at startup. Through a proxy, Cloudflare often returns 403 (Node.js TLS fingerprint rejection). cac bypasses this by temporarily running a local HTTPS server on port 443 with a trusted certificate, so the health check resolves instantly.
+
+This is automatic and only active for the first few seconds of each `claude` session.

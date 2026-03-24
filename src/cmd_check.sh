@@ -99,59 +99,72 @@ cmd_check() {
     fi
 
     local env_dir="$ENVS_DIR/$current"
-    local proxy; proxy=$(_read "$env_dir/proxy")
+    local proxy; proxy=$(_read "$env_dir/proxy" "")
 
     echo "当前环境：$(_bold "$current")"
-    echo "  代理      ：$proxy"
+    echo "  代理      ：${proxy:-（无代理）}"
     echo "  UUID      ：$(_read "$env_dir/uuid")"
     echo "  stable_id ：$(_read "$env_dir/stable_id")"
     echo "  user_id   ：$(_read "$env_dir/user_id" "（旧环境，无此字段）")"
+    echo "  版本      ：$(_read "$env_dir/version" "system")"
     echo "  TZ        ：$(_read "$env_dir/tz" "（未设置）")"
     echo "  LANG      ：$(_read "$env_dir/lang" "（未设置）")"
     echo
 
-    # ── 网络连通性 ──
-    printf "  TCP 连通  ... "
-    if ! _proxy_reachable "$proxy"; then
-        echo "$(_red "✗ 不通")"; return
-    fi
-    echo "$(_green "✓")"
+    # ── 网络连通性（仅在有代理时检查）──
+    if [[ -n "$proxy" ]]; then
+        printf "  TCP 连通  ... "
+        if ! _proxy_reachable "$proxy"; then
+            echo "$(_red "✗ 不通")"; return
+        fi
+        echo "$(_green "✓")"
 
-    printf "  出口 IP   ... "
-    local proxy_ip
-    proxy_ip=$(curl -s --proxy "$proxy" \
-         --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$proxy_ip" ]]; then
-        echo "$(_green "$proxy_ip")"
+        printf "  出口 IP   ... "
+        local proxy_ip
+        proxy_ip=$(curl -s --proxy "$proxy" \
+             --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+        if [[ -n "$proxy_ip" ]]; then
+            echo "$(_green "$proxy_ip")"
+        else
+            echo "$(_yellow "获取失败")"
+        fi
     else
-        echo "$(_yellow "获取失败")"
+        echo "  $(_dim "（无代理，跳过网络检查）")"
     fi
 
-    # ── 本地代理冲突检测（复用已获取的 proxy_ip）──
-    echo
-    echo "── 冲突检测 ────────────────────────────────────────────"
-    printf "  代理冲突  ... "
-    _check_proxy_conflict "$proxy" "$proxy_ip"
+    # ── 本地代理冲突检测（仅在有代理时）──
+    if [[ -n "$proxy" ]]; then
+        echo
+        echo "── 冲突检测 ────────────────────────────────────────────"
+        printf "  代理冲突  ... "
+        _check_proxy_conflict "$proxy" "${proxy_ip:-}"
+    fi
 
     echo
     echo "── Relay 中转 ────────────────────────────────────────"
-    if [[ -f "$env_dir/relay" ]] && [[ "$(_read "$env_dir/relay")" == "on" ]]; then
-        printf "  Relay 模式 ... %s\n" "$(_green "已启用")"
-        if _relay_is_running; then
-            local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
-            local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
-            printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    if _relay_is_running; then
+        local rpid; rpid=$(_read "$CAC_DIR/relay.pid")
+        local rport; rport=$(_read "$CAC_DIR/relay.port" "未知")
+        printf "  Relay 进程 ... %s (PID=%s, 端口=%s)\n" "$(_green "运行中")" "$rpid" "$rport"
+    elif [[ -n "$proxy" ]]; then
+        # 有代理时临时启动 relay 做连通性测试
+        printf "  Relay 测试 ... "
+        if _relay_start "$current" 2>/dev/null; then
+            local rport; rport=$(_read "$CAC_DIR/relay.port" "")
+            local relay_ip
+            relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+            if [[ -n "$relay_ip" ]]; then
+                printf "%s (端口=%s, 出口=%s)\n" "$(_green "✓ 连通")" "$rport" "$(_cyan "$relay_ip")"
+            else
+                printf "%s (端口=%s, 代理不通)\n" "$(_yellow "⚠ 启动成功但无法连通")" "$rport"
+            fi
+            _relay_stop 2>/dev/null || true
         else
-            printf "  Relay 进程 ... %s\n" "$(_yellow "未启动（将在 claude 启动时自动启动）")"
+            printf "%s\n" "$(_red "✗ 启动失败")"
         fi
-        if [[ -f "$CAC_DIR/relay_route_ip" ]]; then
-            printf "  直连路由   ... %s\n" "$(_read "$CAC_DIR/relay_route_ip")"
-        fi
+        echo "  $(_dim "（relay 将在 claude 启动时自动启用）")"
     else
-        echo "  Relay 模式 ... 未启用"
-        if _detect_tun_active 2>/dev/null; then
-            echo "    $(_yellow "⚠") 检测到 TUN 模式，建议运行 'cac relay on' 绕过冲突"
-        fi
+        echo "  Relay     ... $(_dim "（无代理，不需要 relay）")"
     fi
 
     echo

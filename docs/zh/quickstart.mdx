@@ -1,0 +1,88 @@
+---
+title: "快速开始"
+description: "安装 cac 并创建你的第一个隔离环境。"
+icon: "rocket"
+---
+
+<Steps>
+  <Step title="安装 cac">
+    <Tabs>
+      <Tab title="npm">
+        ```bash
+        npm install -g claude-cac
+        ```
+      </Tab>
+      <Tab title="脚本">
+        ```bash
+        curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
+        ```
+      </Tab>
+    </Tabs>
+
+    无需 `setup` 命令——cac 在首次使用时自动初始化。
+  </Step>
+
+  <Step title="安装 Claude Code 版本">
+    ```bash
+    cac claude install latest
+    ```
+
+    下载最新的 Claude Code 二进制文件并进行 SHA256 校验。你也可以安装指定版本：
+
+    ```bash
+    cac claude install 2.1.81
+    ```
+  </Step>
+
+  <Step title="创建环境">
+    每个环境都有隔离的身份标识（UUID、主机名、MAC）和独立的 `.claude` 配置目录。
+
+    ```bash
+    # 最小化——仅身份隔离
+    cac env create personal
+
+    # 带代理
+    cac env create work -p 1.2.3.4:1080:user:pass
+
+    # 带代理 + 锁定版本
+    cac env create work -p 1.2.3.4:1080:user:pass -c 2.1.81
+    ```
+
+    <Info>
+    代理是可选的。如果你使用 API Key 和 Base URL，完全不需要 `-p` 参数。参见 [API Key 用户](/guides/api-key-users)。
+    </Info>
+  </Step>
+
+  <Step title="激活并运行">
+    ```bash
+    cac work
+    claude
+    ```
+
+    首次使用时，在 Claude Code 中输入 `/login` 完成 OAuth 认证。之后直接运行 `claude` 即可。
+  </Step>
+</Steps>
+
+## 刚才发生了什么？
+
+当你激活 `work` 并运行 `claude` 时，cac 的包装器：
+
+1. 将 `CLAUDE_CONFIG_DIR` 设置为 `~/.cac/envs/work/.claude/`（隔离配置）
+2. 从 `~/.cac/versions/2.1.81/claude` 解析锁定的 Claude Code 二进制文件
+3. 注入设备指纹代理脚本（主机名、UUID、MAC）
+4. 通过 DNS 守卫 + 环境变量拦截遥测端点
+5. 通过你的代理路由流量（如果已配置）
+6. 启动真正的 Claude Code 二进制文件
+
+这一切对 Claude Code 来说是透明的——它看到的是一个正常的环境。
+
+## 下一步
+
+<Columns cols={2}>
+  <Card title="代理设置" icon="globe" href="/guides/proxy-setup">
+    协议自动检测、SOCKS5、分享链接。
+  </Card>
+  <Card title="Docker 模式" icon="docker" href="/guides/docker-mode">
+    带 TUN 网络的完全隔离容器。
+  </Card>
+</Columns>
