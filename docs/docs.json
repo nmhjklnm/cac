@@ -26,16 +26,17 @@
       "github": "https://github.com/nmhjklnm/cac"
     }
   },
+  "rounded": "default",
   "tabs": [
     {
       "id": "guides",
       "name": "Guides",
-      "isDefaultHidden": true
+      "icon": "book"
     },
     {
       "id": "reference",
       "name": "Reference",
-      "isDefaultHidden": true
+      "icon": "code"
     }
   ],
   "navigation": {

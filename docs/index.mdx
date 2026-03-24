@@ -1,44 +1,63 @@
 ---
 title: "cac"
+sidebarTitle: "Introduction"
 description: "Isolate, protect, and manage your Claude Code"
+icon: "umbrella"
 ---
 
-Manage Claude Code versions, environments, identities, and proxies from a single CLI. Each environment is fully isolated: its own Claude Code version, `.claude` config, device fingerprint, and network route.
+**cac** gives you full control over your Claude Code runtime — versions, config, identity, and network — from a single CLI.
+
+Each environment is completely isolated: its own Claude Code binary, `.claude` config directory, device fingerprint, and optional proxy route.
 
 <Columns cols={2}>
   <Card title="Quickstart" icon="rocket" href="/quickstart">
-    Install cac and create your first environment in 60 seconds.
+    Create your first isolated environment in 60 seconds.
   </Card>
   <Card title="Concepts" icon="lightbulb" href="/concepts">
-    Understand how versions, environments, and isolation work.
+    How versions, environments, and isolation work together.
   </Card>
   <Card title="Commands" icon="terminal" href="/commands/env">
-    Full command reference for cac claude, env, self, and docker.
+    Full reference for cac claude, env, self, and docker.
   </Card>
-  <Card title="How it works" icon="shield" href="/reference/how-it-works">
-    Wrapper architecture, fingerprint spoofing, and telemetry blocking.
+  <Card title="How it works" icon="shield-halved" href="/reference/how-it-works">
+    Wrapper architecture, fingerprint layers, telemetry blocking.
   </Card>
 </Columns>
 
-## Why cac?
+## What cac does
 
-Claude Code reads device identifiers at runtime — hardware UUID, MAC address, hostname, machine ID. It also phones home to telemetry endpoints. **cac** intercepts all of this at the process level, without modifying Claude Code's source.
-
-| What cac does | How |
-|:---|:---|
-| Version management | Download, pin, and switch Claude Code binaries |
-| Config isolation | Each environment gets its own `CLAUDE_CONFIG_DIR` |
-| Fingerprint spoofing | Shell shims + Node.js hooks replace all device identifiers |
-| Telemetry blocking | DNS guard + 12 env vars + fetch interception |
-| Proxy routing | Process-level HTTP/SOCKS5 with auto-protocol detection |
-| TUN bypass | Auto-relay when TUN proxy software is detected |
+<AccordionGroup>
+  <Accordion title="Version management" icon="download" defaultOpen={true}>
+    Download, pin, and switch Claude Code binaries. Each environment can use a different version.
+    ```bash
+    cac claude install latest
+    cac claude pin 2.1.81
+    ```
+  </Accordion>
+  <Accordion title="Config isolation" icon="folder-tree">
+    Each environment gets its own `CLAUDE_CONFIG_DIR` — sessions, settings, memory, and auth tokens are fully separate.
+  </Accordion>
+  <Accordion title="Fingerprint spoofing" icon="fingerprint">
+    Shell shims + Node.js hooks replace all device identifiers: hardware UUID, hostname, MAC address, machine ID.
+  </Accordion>
+  <Accordion title="Telemetry blocking" icon="shield">
+    DNS guard + 12 environment variables + fetch interception + HOSTALIASES — multiple independent layers.
+  </Accordion>
+  <Accordion title="Proxy routing" icon="globe">
+    Optional process-level HTTP/SOCKS5 proxy with auto-protocol detection. Auto-relay when TUN conflicts detected.
+  </Accordion>
+</AccordionGroup>
 
 ## Command overview
 
 ```bash
 cac claude   install | ls | pin | uninstall       # version management
-cac env      create | ls | rm | activate |         # environment management
+cac env      create | ls | rm | activate |        # environment management
              deactivate | check
-cac self     update | delete                       # self-management
-cac docker   setup | start | enter | ...           # containerized mode
+cac self     update | delete                      # self-management
+cac docker   setup | start | enter | ...          # containerized mode
 ```
+
+<Tip>
+Proxy is optional. API Key users get the same fingerprint isolation and telemetry blocking — just skip the `-p` flag. See [API key users](/guides/api-key-users).
+</Tip>
