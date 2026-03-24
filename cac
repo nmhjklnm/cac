@@ -2710,6 +2710,8 @@ case "$1" in
     relay)              cmd_relay "${@:2}" ;;
     docker)             cmd_docker "${@:2}" ;;
     delete|uninstall)   cmd_delete        ;;
+    add)                echo "$(_yellow "warning:") 'cac add' is deprecated, use 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
+    setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes on first use" >&2 ;;
     -c)                 echo "$(_yellow "warning:") 'cac -c' is deprecated, use 'cac resume'" >&2; cmd_continue ;;
     -v|--version)       cmd_version       ;;
     help|--help|-h)     cmd_help          ;;
