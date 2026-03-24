@@ -1,0 +1,108 @@
+---
+title: "工作原理"
+description: "包装器架构、指纹伪装和拦截链。"
+icon: "shield"
+---
+
+## 包装器
+
+当你运行 `claude` 时，实际执行的是 cac 的包装器 `~/.cac/bin/claude`（它在 `PATH` 中排在最前面）。包装器的工作流程：
+
+```
+claude（用户输入）
+  │
+  ▼
+~/.cac/bin/claude（包装器）
+  │
+  ├─ 读取 ~/.cac/current → 活跃环境名称
+  ├─ 读取 ~/.cac/envs/<name>/ → 身份、代理、版本
+  │
+  ├─ 设置 CLAUDE_CONFIG_DIR → 隔离的 .claude 目录
+  ├─ 解析版本化二进制文件 → ~/.cac/versions/<ver>/claude
+  │
+  ├─ [如有代理] 预检 TCP 连接
+  ├─ [如有代理] 注入 HTTPS_PROXY、HTTP_PROXY、ALL_PROXY
+  ├─ [如有代理] 清除 ANTHROPIC_API_KEY（强制 OAuth）
+  ├─ [如无代理] 保留 ANTHROPIC_API_KEY（API Key 认证）
+  │
+  ├─ 将 ~/.cac/shim-bin 添加到 PATH 最前面
+  ├─ 设置 NODE_OPTIONS → fingerprint-hook.js + dns-guard.js
+  ├─ 设置 12 个遥测屏蔽环境变量
+  ├─ 设置 TZ、LANG、HOSTNAME、CAC_* 身份变量
+  ├─ 注入 mTLS 证书环境变量
+  │
+  ├─ [如有代理] 启动健康检查绕过服务器
+  ├─ [如有代理 + TUN] 启动自动中继
+  │
+  ▼
+~/.cac/versions/<ver>/claude（真正的二进制文件）
+```
+
+## 指纹伪装层
+
+### 第一层：Shell 代理脚本
+
+`~/.cac/shim-bin/` 包含拦截系统命令的脚本：
+
+| 代理脚本 | 拦截对象 | 平台 |
+|:---|:---|:---|
+| `hostname` | `hostname` 命令 → 返回伪装主机名 | 全部 |
+| `ifconfig` | `ifconfig` 输出 → 替换 MAC 地址 | 全部 |
+| `ioreg` | `ioreg -rd1 -c IOPlatformExpertDevice` → 伪装 UUID | macOS |
+| `cat` | `cat /etc/machine-id` → 伪装机器 ID | Linux |
+
+代理脚本仅拦截特定调用。所有其他调用会透传到真正的命令。
+
+### 第二层：Node.js 钩子
+
+`fingerprint-hook.js` 通过 `NODE_OPTIONS --require` 注入，对以下方法进行猴子补丁：
+
+- `os.hostname()` → `CAC_HOSTNAME`
+- `os.networkInterfaces()` → 来自 `CAC_MAC` 的伪装 MAC
+- `os.userInfo()` → `CAC_USERNAME`
+- `fs.readFileSync('/etc/machine-id')` → `CAC_MACHINE_ID`
+
+### 第三层：环境变量
+
+身份值也作为环境变量导出（`CAC_HOSTNAME`、`CAC_MAC`、`CAC_MACHINE_ID`、`CAC_USERNAME`），以便任何子进程都可以访问。
+
+## 遥测拦截
+
+### DNS 级别
+
+`cac-dns-guard.js` 拦截 Node.js DNS 解析和 `fetch()` 以阻止：
+- `statsig.anthropic.com`
+- `sentry.io` / `sentry-cdn.com`
+- `segment.io` / `segment.com`
+- 其他已知遥测端点
+
+### 环境变量级别
+
+设置 12 个环境变量以在多个框架中禁用遥测：
+
+| 变量 | 值 | 目标 |
+|:---|:---|:---|
+| `DO_NOT_TRACK` | `1` | 通用标准 |
+| `OTEL_SDK_DISABLED` | `true` | OpenTelemetry |
+| `OTEL_TRACES_EXPORTER` | `none` | OpenTelemetry |
+| `SENTRY_DSN` | （空） | Sentry |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | Claude Code |
+| ... | ... | ... |
+
+### HOSTALIASES
+
+`~/.cac/blocked_hosts` 通过 `HOSTALIASES` 环境变量将遥测域名映射到 `0.0.0.0`。
+
+## mTLS
+
+每个环境都有一个由 cac 自签名 CA 签发的客户端证书。CA 证书通过 `NODE_EXTRA_CA_CERTS` 设为受信任。这在包装器和任何验证客户端证书的服务之间提供了额外的认证层。
+
+## 配置隔离
+
+`CLAUDE_CONFIG_DIR` 被设置为 `~/.cac/envs/<name>/.claude/`。这意味着：
+- 会话按环境隔离
+- 设置按环境隔离
+- 项目记忆按环境隔离
+- 认证令牌按环境隔离
+
+使用 `cac work` 和 `cac personal` 切换环境，会给你完全独立的 Claude Code 体验。

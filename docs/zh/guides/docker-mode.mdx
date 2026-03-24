@@ -1,0 +1,75 @@
+---
+title: "Docker 模式"
+description: "在完全隔离的容器中运行 Claude Code，支持 TUN 网络。"
+icon: "docker"
+---
+
+Docker 模式提供最强的隔离：独立的网络命名空间，配合 sing-box TUN 透明代理，加上 cac 身份保护和预装的 Claude Code。
+
+## 快速开始
+
+```bash
+cac docker setup     # 粘贴你的代理地址
+cac docker start     # 启动容器
+cac docker enter     # 进入容器 Shell — claude + cac 已就绪
+```
+
+## 设置
+
+`cac docker setup` 是一个交互式向导，它会：
+
+1. 询问你的代理地址（支持紧凑格式和分享链接格式）
+2. 自动检测本地或远程 Docker 安装
+3. 自动检测 macvlan 模式的网络参数（网卡、子网、网关）
+4. 将配置写入 `docker/.env`
+
+### 代理格式
+
+```
+ip:port:user:pass          # 紧凑格式 SOCKS5
+ss://...                   # Shadowsocks 分享链接
+vmess://...                # VMess 分享链接
+vless://...                # VLESS 分享链接
+trojan://...               # Trojan 分享链接
+```
+
+## 容器内部发生了什么
+
+首次启动时，入口脚本会自动：
+
+<Steps>
+  <Step title="启动 sing-box TUN">
+    所有容器流量在内核层面透明地通过你的代理路由。应用程序看不到代理环境变量。
+  </Step>
+  <Step title="检测时区和语言">
+    查询出口 IP 以确定时区和语言，然后配置容器。
+  </Step>
+  <Step title="创建 cac 配置">
+    生成唯一身份标识（UUID、主机名、MAC、机器 ID）和 mTLS 证书。
+  </Step>
+  <Step title="激活配置">
+    设置环境变量并写入 `/root/.cac-env` 以在 Shell 会话间持久化。
+  </Step>
+</Steps>
+
+## 持久化存储
+
+`/root` 和 `/home` 通过 bind mount 挂载到主机的 `docker/data/`。你的 Claude Code 会话、设置和工作文件在容器重启后依然保留。
+
+## 端口转发
+
+要从容器暴露端口（例如开发服务器）：
+
+```bash
+cac docker port 6287
+```
+
+这会启动一个 socat/python3 中继，将主机的 `localhost:6287` 转发到容器。
+
+## 诊断
+
+```bash
+cac docker check
+```
+
+检查 TUN 状态、DNS、TCP/HTTP 连通性、出口 IP、泄露检测和身份伪装。

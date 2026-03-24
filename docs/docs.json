@@ -55,47 +55,98 @@
     }
   ],
   "navigation": {
-    "groups": [
+    "languages": [
       {
-        "group": "Get started",
-        "pages": [
-          "index",
-          "quickstart",
-          "concepts"
-        ]
+        "language": "en",
+        "default": true,
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "index",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Commands",
+            "pages": [
+              "commands/claude",
+              "commands/env",
+              "commands/self",
+              "commands/docker"
+            ]
+          }
+        ],
+        "tabs": {
+          "guides": [
+            {
+              "group": "Guides",
+              "pages": [
+                "guides/proxy-setup",
+                "guides/api-key-users",
+                "guides/docker-mode",
+                "guides/migrating"
+              ]
+            }
+          ],
+          "reference": [
+            {
+              "group": "Reference",
+              "pages": [
+                "reference/file-layout",
+                "reference/how-it-works",
+                "reference/privacy-layers"
+              ]
+            }
+          ]
+        }
       },
       {
-        "group": "Commands",
-        "pages": [
-          "commands/claude",
-          "commands/env",
-          "commands/self",
-          "commands/docker"
-        ]
+        "language": "zh",
+        "groups": [
+          {
+            "group": "快速上手",
+            "pages": [
+              "zh/index",
+              "zh/quickstart",
+              "zh/concepts"
+            ]
+          },
+          {
+            "group": "命令",
+            "pages": [
+              "zh/commands/claude",
+              "zh/commands/env",
+              "zh/commands/self",
+              "zh/commands/docker"
+            ]
+          }
+        ],
+        "tabs": {
+          "guides": [
+            {
+              "group": "指南",
+              "pages": [
+                "zh/guides/proxy-setup",
+                "zh/guides/api-key-users",
+                "zh/guides/docker-mode",
+                "zh/guides/migrating"
+              ]
+            }
+          ],
+          "reference": [
+            {
+              "group": "参考",
+              "pages": [
+                "zh/reference/file-layout",
+                "zh/reference/how-it-works",
+                "zh/reference/privacy-layers"
+              ]
+            }
+          ]
+        }
       }
-    ],
-    "tabs": {
-      "guides": [
-        {
-          "group": "Guides",
-          "pages": [
-            "guides/proxy-setup",
-            "guides/api-key-users",
-            "guides/docker-mode",
-            "guides/migrating"
-          ]
-        }
-      ],
-      "reference": [
-        {
-          "group": "Reference",
-          "pages": [
-            "reference/file-layout",
-            "reference/how-it-works",
-            "reference/privacy-layers"
-          ]
-        }
-      ]
-    }
+    ]
   }
 }

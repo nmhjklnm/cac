@@ -1,0 +1,93 @@
+---
+title: "核心概念"
+description: "cac 如何组织版本、环境和隔离。"
+icon: "lightbulb"
+---
+
+## 版本
+
+**版本**是由 cac 管理的 Claude Code 二进制文件。二进制文件从 Anthropic 官方分发渠道下载，并通过 SHA256 校验验证。
+
+```
+~/.cac/versions/
+├── 2.1.81/claude      # 指定版本
+├── 2.1.80/claude      # 另一个版本
+└── .latest            # 追踪哪个版本是"最新"
+```
+
+你可以同时安装多个版本。每个环境可以锁定不同的版本。
+
+```bash
+cac claude install latest
+cac claude install 2.1.81
+cac claude ls
+```
+
+## 环境
+
+**环境**是运行 Claude Code 的完整隔离上下文。它包括：
+
+| 组件 | 隔离内容 |
+|:---|:---|
+| `.claude/` 配置 | 会话、设置、项目记忆、认证令牌 |
+| 设备身份 | UUID、主机名、MAC 地址、机器 ID、稳定 ID |
+| Claude Code 版本 | 锁定的二进制文件（或系统默认） |
+| 代理 | 可选的网络路由 |
+| mTLS 证书 | 由 cac CA 签发的每环境客户端证书 |
+
+```
+~/.cac/envs/work/
+├── .claude/            # 隔离的 CLAUDE_CONFIG_DIR
+├── proxy               # 代理 URL（可选）
+├── version             # 锁定的 Claude Code 版本
+├── uuid                # 伪装的硬件 UUID
+├── hostname            # 伪装的主机名
+├── mac_address         # 伪装的 MAC
+├── machine_id          # 伪装的 /etc/machine-id
+├── stable_id           # 伪装的 statsig ID
+├── user_id             # 伪装的用户 ID
+├── client_cert.pem     # mTLS 客户端证书
+└── type                # "local" 或 "container"
+```
+
+## 激活
+
+激活环境是**全局**的——它影响所有终端和所有项目目录。这是设计使然：你的身份和代理路由是用户级别的关注点，而非项目级别的。
+
+```bash
+cac work              # 激活 "work" 环境
+cac env deactivate    # 回到无保护模式
+```
+
+激活后，cac 包装器会拦截每次 `claude` 调用并应用该环境的设置。
+
+## 代理是可选的
+
+两种用户类型：
+
+| 用户类型 | 设置方式 | cac 的作用 |
+|:---|:---|:---|
+| **代理用户** | `cac env create work -p proxy` | 指纹隔离 + 代理路由 + 遥测拦截 |
+| **API Key 用户** | `cac env create work` | 指纹隔离 + 遥测拦截（保留 `ANTHROPIC_API_KEY`） |
+
+未配置代理时，cac 会保留你的 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN` 环境变量。配置代理后，这些变量会被清除以强制通过代理进行 OAuth 认证。
+
+## 自动安装
+
+当你引用尚未安装的版本时，cac 会自动下载——就像 `uv` 自动安装 Python 版本一样：
+
+```bash
+# 版本 2.1.81 未安装？cac 会先下载，然后创建环境。
+cac env create work -c 2.1.81
+```
+
+## 自动中继
+
+如果 cac 检测到系统中运行了 TUN 模式的代理软件（Clash、Surge、sing-box），它会自动启动本地 TCP 中继。这可以防止 TUN 包裹 cac 代理流量导致的双重代理问题。
+
+```
+claude ──► wrapper ──► relay (127.0.0.1) ──► remote proxy ──► API
+                        ↑ 回环流量绕过 TUN
+```
+
+无需用户操作——中继会自动激活和停止。

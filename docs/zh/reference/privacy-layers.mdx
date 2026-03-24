@@ -1,0 +1,110 @@
+---
+title: "隐私防护层"
+description: "所有防护机制及每层拦截的内容。"
+icon: "lock"
+---
+
+cac 应用多层独立的防护机制。每层独立运作——组合在一起提供纵深防御。
+
+## 概览
+
+```
+┌─────────────────────────────────────────────────┐
+│  第 7 层：CLAUDE_CONFIG_DIR 隔离                  │  会话、设置、记忆
+│  第 6 层：mTLS 客户端证书                          │  每环境 CA 签发的证书
+│  第 5 层：健康检查绕过                             │  本地 HTTPS（端口 443）
+│  第 4 层：DNS 守卫 + fetch 拦截                    │  拦截遥测域名
+│  第 3 层：HOSTALIASES                             │  遥测域名 → 0.0.0.0
+│  第 2 层：12 个遥测环境变量                        │  DO_NOT_TRACK、OTEL、Sentry
+│  第 1 层：设备指纹伪装                             │  UUID、主机名、MAC、machine-id
+│  第 0 层：进程级代理（可选）                        │  所有流量通过代理路由
+└─────────────────────────────────────────────────┘
+```
+
+## 第 0 层：代理路由
+
+**配置代理时。** `claude` 的所有出站流量都通过你的代理。
+
+- `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY` 设置为代理 URL
+- `NO_PROXY` 设置为 `localhost,127.0.0.1`
+- 检测到 TUN 时自动中继
+
+**未配置代理时。** 不设置代理环境变量。流量直连。保留 `ANTHROPIC_API_KEY`。
+
+## 第 1 层：设备指纹伪装
+
+每个环境生成唯一的设备标识符：
+
+| 标识符 | 真实来源 | cac 替换值 |
+|:---|:---|:---|
+| 硬件 UUID | macOS `ioreg`、Linux `/etc/machine-id` | 每环境随机 UUID |
+| 主机名 | `hostname` 命令、`os.hostname()` | 每环境 `host-<random>` |
+| MAC 地址 | `ifconfig`、`os.networkInterfaces()` | 每环境 `02:xx:xx:xx:xx:xx` |
+| 机器 ID | `/etc/machine-id`、`/var/lib/dbus/machine-id` | 每环境随机十六进制 |
+| 稳定 ID | Statsig SDK | 每环境随机 UUID |
+| 用户 ID | Claude 配置 | 每环境随机十六进制 |
+
+在两个层面进行伪装：Shell 代理脚本（用于命令行工具）和 Node.js 钩子（用于编程访问）。
+
+## 第 2 层：遥测环境变量
+
+```bash
+CLAUDE_CODE_ENABLE_TELEMETRY=         # Claude Code 原生
+DO_NOT_TRACK=1                        # 通用标准
+OTEL_SDK_DISABLED=true                # OpenTelemetry
+OTEL_TRACES_EXPORTER=none
+OTEL_METRICS_EXPORTER=none
+OTEL_LOGS_EXPORTER=none
+SENTRY_DSN=                           # Sentry
+DISABLE_ERROR_REPORTING=1             # Claude Code
+DISABLE_BUG_COMMAND=1
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+TELEMETRY_DISABLED=1
+DISABLE_TELEMETRY=1
+```
+
+## 第 3 层：HOSTALIASES
+
+通过 `HOSTALIASES` 环境变量将遥测域名映射到 `0.0.0.0`：
+
+```
+0.0.0.0 statsig.anthropic.com
+0.0.0.0 sentry.io
+0.0.0.0 cdn.segment.com
+...
+```
+
+在 `gethostbyname()` 层面生效——作为 DNS 守卫的备用方案。
+
+## 第 4 层：DNS 守卫 + fetch 拦截
+
+`cac-dns-guard.js` 通过 `NODE_OPTIONS --require` 加载：
+
+- 拦截 `dns.lookup()` 和 `dns.resolve()` 以阻止遥测域名
+- 替换 `global.fetch` 以阻止/重定向遥测请求
+- 管理 `NO_PROXY` 以配合健康检查绕过的时序
+
+## 第 5 层：健康检查绕过
+
+Claude Code 在启动时 ping `api.anthropic.com/api/hello`。通过代理时，Cloudflare 返回 403。
+
+cac 在端口 443 上启动一个本地 HTTPS 服务器，使用通过 `NODE_EXTRA_CA_CERTS` 信任的证书，将 `api.anthropic.com` 添加到 `/etc/hosts` 指向 `127.0.0.1`，并将其添加到 `NO_PROXY`。健康检查立即以 HTTP 200 完成。3 秒后，绕过被清理。
+
+仅在配置了代理时激活。
+
+## 第 6 层：mTLS 证书
+
+每个环境都有一个由 cac CA（`~/.cac/ca/ca_cert.pem`）签发的客户端证书。通过以下方式注入：
+
+- `CAC_MTLS_CERT` / `CAC_MTLS_KEY` — 证书路径
+- `NODE_EXTRA_CA_CERTS` — CA 信任
+
+## 第 7 层：配置隔离
+
+`CLAUDE_CONFIG_DIR` 指向 `~/.cac/envs/<name>/.claude/` 而非 `~/.claude/`。这隔离了：
+
+- 认证令牌（OAuth / 会话）
+- 设置（`settings.json`）
+- 项目记忆
+- 会话历史
+- Statsig 状态

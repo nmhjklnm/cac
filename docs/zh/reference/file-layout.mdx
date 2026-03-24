@@ -1,0 +1,61 @@
+---
+title: "文件布局"
+description: "cac 存储数据的位置。"
+icon: "folder-tree"
+---
+
+```
+~/.cac/
+├── versions/                     # 托管的 Claude Code 二进制文件
+│   ├── 2.1.81/
+│   │   ├── claude                # ELF/Mach-O 二进制文件
+│   │   └── .version              # 版本元数据
+│   ├── 2.1.80/
+│   │   └── claude
+│   └── .latest                   # 追踪"最新"版本字符串
+│
+├── envs/                         # 环境
+│   └── work/
+│       ├── .claude/              # 隔离的 CLAUDE_CONFIG_DIR
+│       │   ├── settings.json
+│       │   ├── projects/
+│       │   └── ...
+│       ├── proxy                 # 代理 URL（可选）
+│       ├── version               # 锁定的 Claude Code 版本
+│       ├── type                  # "local" 或 "container"
+│       ├── uuid                  # 伪装的硬件 UUID
+│       ├── stable_id             # 伪装的 statsig 稳定 ID
+│       ├── user_id               # 伪装的用户 ID（十六进制）
+│       ├── machine_id            # 伪装的 /etc/machine-id
+│       ├── hostname              # 伪装的主机名
+│       ├── mac_address           # 伪装的 MAC 地址
+│       ├── tz                    # 时区
+│       ├── lang                  # 语言区域
+│       ├── client_cert.pem       # mTLS 客户端证书
+│       └── client_key.pem        # mTLS 私钥
+│
+├── bin/
+│   └── claude                    # 包装器脚本（拦截所有 claude 调用）
+│
+├── shim-bin/                     # 设备身份代理脚本
+│   ├── hostname                  # 返回伪装的主机名
+│   ├── ifconfig                  # 返回伪装的 MAC
+│   ├── ioreg                     # macOS：返回伪装的 IOPlatformUUID
+│   └── cat                       # Linux：拦截 /etc/machine-id
+│
+├── fingerprint-hook.js           # Node.js 预加载：os.hostname、networkInterfaces、userInfo
+├── relay.js                      # TCP 中继服务器（自动管理）
+├── cac-dns-guard.js              # DNS + fetch 遥测拦截
+├── blocked_hosts                 # 遥测域名的 HOSTALIASES 文件
+│
+├── ca/                           # 证书颁发机构
+│   ├── ca_cert.pem               # 自签名 CA
+│   ├── ca_key.pem                # CA 私钥
+│   ├── hb_cert.pem               # 健康检查绕过证书
+│   └── hb_key.pem                # 健康检查绕过私钥
+│
+├── current                       # 当前活跃环境的名称
+├── stopped                       # 存在 = 已停用
+├── real_claude                   # 系统 Claude Code 二进制文件的路径
+└── relay.pid / relay.port        # 中继进程状态
+```
