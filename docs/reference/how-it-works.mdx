@@ -1,0 +1,108 @@
+---
+title: "How it works"
+description: "Wrapper architecture, fingerprint spoofing, and the interception chain."
+icon: "shield"
+---
+
+## The wrapper
+
+When you run `claude`, it's actually cac's wrapper at `~/.cac/bin/claude` (which is first in `PATH`). The wrapper:
+
+```
+claude (user types)
+  │
+  ▼
+~/.cac/bin/claude (wrapper)
+  │
+  ├─ Read ~/.cac/current → active environment name
+  ├─ Read ~/.cac/envs/<name>/ → identity, proxy, version
+  │
+  ├─ Set CLAUDE_CONFIG_DIR → isolated .claude directory
+  ├─ Resolve versioned binary → ~/.cac/versions/<ver>/claude
+  │
+  ├─ [if proxy] Pre-flight TCP check
+  ├─ [if proxy] Inject HTTPS_PROXY, HTTP_PROXY, ALL_PROXY
+  ├─ [if proxy] Clear ANTHROPIC_API_KEY (force OAuth)
+  ├─ [if no proxy] Keep ANTHROPIC_API_KEY (API key auth)
+  │
+  ├─ Prepend ~/.cac/shim-bin to PATH
+  ├─ Set NODE_OPTIONS → fingerprint-hook.js + dns-guard.js
+  ├─ Set 12 telemetry kill env vars
+  ├─ Set TZ, LANG, HOSTNAME, CAC_* identity vars
+  ├─ Inject mTLS cert env vars
+  │
+  ├─ [if proxy] Start health check bypass server
+  ├─ [if proxy + TUN] Start auto-relay
+  │
+  ▼
+~/.cac/versions/<ver>/claude (real binary)
+```
+
+## Fingerprint spoofing layers
+
+### Layer 1: Shell shims
+
+`~/.cac/shim-bin/` contains scripts that intercept system commands:
+
+| Shim | What it intercepts | Platform |
+|:---|:---|:---|
+| `hostname` | `hostname` command → returns fake hostname | All |
+| `ifconfig` | `ifconfig` output → replaces MAC address | All |
+| `ioreg` | `ioreg -rd1 -c IOPlatformExpertDevice` → fake UUID | macOS |
+| `cat` | `cat /etc/machine-id` → fake machine ID | Linux |
+
+Shims only intercept targeted calls. All other invocations pass through to the real command.
+
+### Layer 2: Node.js hooks
+
+`fingerprint-hook.js` is injected via `NODE_OPTIONS --require` and monkey-patches:
+
+- `os.hostname()` → `CAC_HOSTNAME`
+- `os.networkInterfaces()` → fake MAC from `CAC_MAC`
+- `os.userInfo()` → `CAC_USERNAME`
+- `fs.readFileSync('/etc/machine-id')` → `CAC_MACHINE_ID`
+
+### Layer 3: Environment variables
+
+Identity values are also exported as env vars (`CAC_HOSTNAME`, `CAC_MAC`, `CAC_MACHINE_ID`, `CAC_USERNAME`) so they're available to any child process.
+
+## Telemetry blocking
+
+### DNS-level
+
+`cac-dns-guard.js` intercepts Node.js DNS resolution and `fetch()` to block:
+- `statsig.anthropic.com`
+- `sentry.io` / `sentry-cdn.com`
+- `segment.io` / `segment.com`
+- Other known telemetry endpoints
+
+### Environment variable level
+
+12 env vars are set to disable telemetry across multiple frameworks:
+
+| Variable | Value | Target |
+|:---|:---|:---|
+| `DO_NOT_TRACK` | `1` | Universal standard |
+| `OTEL_SDK_DISABLED` | `true` | OpenTelemetry |
+| `OTEL_TRACES_EXPORTER` | `none` | OpenTelemetry |
+| `SENTRY_DSN` | (empty) | Sentry |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | Claude Code |
+| ... | ... | ... |
+
+### HOSTALIASES
+
+`~/.cac/blocked_hosts` maps telemetry domains to `0.0.0.0` via the `HOSTALIASES` environment variable.
+
+## mTLS
+
+Each environment has a client certificate signed by cac's self-signed CA. The CA cert is trusted via `NODE_EXTRA_CA_CERTS`. This provides an additional authentication layer between the wrapper and any services that verify client certificates.
+
+## Config isolation
+
+`CLAUDE_CONFIG_DIR` is set to `~/.cac/envs/<name>/.claude/`. This means:
+- Sessions are per-environment
+- Settings are per-environment
+- Project memory is per-environment
+- Auth tokens are per-environment
+
+Switching environments with `cac work` vs `cac personal` gives you completely separate Claude Code experiences.

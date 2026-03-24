@@ -1,0 +1,110 @@
+---
+title: "Privacy layers"
+description: "All protection mechanisms and what each one blocks."
+icon: "lock"
+---
+
+cac applies multiple independent protection layers. Each works on its own — together they provide defense in depth.
+
+## Overview
+
+```
+┌─────────────────────────────────────────────────┐
+│  Layer 7: CLAUDE_CONFIG_DIR isolation            │  Sessions, settings, memory
+│  Layer 6: mTLS client certificates               │  Per-env cert signed by CA
+│  Layer 5: Health check bypass                    │  Local HTTPS on port 443
+│  Layer 4: DNS guard + fetch interception         │  Block telemetry domains
+│  Layer 3: HOSTALIASES                            │  Telemetry domains → 0.0.0.0
+│  Layer 2: 12 telemetry env vars                  │  DO_NOT_TRACK, OTEL, Sentry
+│  Layer 1: Device fingerprint spoofing            │  UUID, hostname, MAC, machine-id
+│  Layer 0: Process-level proxy (optional)         │  Route all traffic through proxy
+└─────────────────────────────────────────────────┘
+```
+
+## Layer 0: Proxy routing
+
+**When configured.** All outbound traffic from `claude` goes through your proxy.
+
+- `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` set to proxy URL
+- `NO_PROXY` set to `localhost,127.0.0.1`
+- Auto-relay when TUN detected
+
+**When not configured.** No proxy env vars set. Traffic goes direct. `ANTHROPIC_API_KEY` preserved.
+
+## Layer 1: Device fingerprint spoofing
+
+Every environment generates unique device identifiers:
+
+| Identifier | Real source | cac replacement |
+|:---|:---|:---|
+| Hardware UUID | macOS `ioreg`, Linux `/etc/machine-id` | Random UUID per env |
+| Hostname | `hostname` command, `os.hostname()` | `host-<random>` per env |
+| MAC address | `ifconfig`, `os.networkInterfaces()` | `02:xx:xx:xx:xx:xx` per env |
+| Machine ID | `/etc/machine-id`, `/var/lib/dbus/machine-id` | Random hex per env |
+| Stable ID | Statsig SDK | Random UUID per env |
+| User ID | Claude config | Random hex per env |
+
+Spoofed at two levels: shell shims (for command-line tools) and Node.js hooks (for programmatic access).
+
+## Layer 2: Telemetry environment variables
+
+```bash
+CLAUDE_CODE_ENABLE_TELEMETRY=         # Claude Code native
+DO_NOT_TRACK=1                        # Universal standard
+OTEL_SDK_DISABLED=true                # OpenTelemetry
+OTEL_TRACES_EXPORTER=none
+OTEL_METRICS_EXPORTER=none
+OTEL_LOGS_EXPORTER=none
+SENTRY_DSN=                           # Sentry
+DISABLE_ERROR_REPORTING=1             # Claude Code
+DISABLE_BUG_COMMAND=1
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+TELEMETRY_DISABLED=1
+DISABLE_TELEMETRY=1
+```
+
+## Layer 3: HOSTALIASES
+
+Maps telemetry domains to `0.0.0.0` via the `HOSTALIASES` environment variable:
+
+```
+0.0.0.0 statsig.anthropic.com
+0.0.0.0 sentry.io
+0.0.0.0 cdn.segment.com
+...
+```
+
+Works at the `gethostbyname()` level — a backup for DNS guard.
+
+## Layer 4: DNS guard + fetch interception
+
+`cac-dns-guard.js` is loaded via `NODE_OPTIONS --require`:
+
+- Intercepts `dns.lookup()` and `dns.resolve()` to block telemetry domains
+- Replaces `global.fetch` to block/redirect telemetry requests
+- Manages `NO_PROXY` for health check bypass timing
+
+## Layer 5: Health check bypass
+
+Claude Code pings `api.anthropic.com/api/hello` at startup. Through a proxy, Cloudflare returns 403.
+
+cac starts a local HTTPS server on port 443 with a certificate trusted via `NODE_EXTRA_CA_CERTS`, adds `api.anthropic.com` to `/etc/hosts` pointing to `127.0.0.1`, and adds it to `NO_PROXY`. The health check resolves instantly with HTTP 200. After 3 seconds, the bypass is cleaned up.
+
+Only active when proxy is configured.
+
+## Layer 6: mTLS certificates
+
+Each environment has a client certificate signed by cac's CA (`~/.cac/ca/ca_cert.pem`). Injected via:
+
+- `CAC_MTLS_CERT` / `CAC_MTLS_KEY` — cert paths
+- `NODE_EXTRA_CA_CERTS` — CA trust
+
+## Layer 7: Config isolation
+
+`CLAUDE_CONFIG_DIR` points to `~/.cac/envs/<name>/.claude/` instead of `~/.claude/`. This isolates:
+
+- Auth tokens (OAuth / session)
+- Settings (`settings.json`)
+- Project memory
+- Session history
+- Statsig state

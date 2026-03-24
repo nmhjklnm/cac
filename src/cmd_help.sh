@@ -2,7 +2,7 @@
 
 cmd_help() {
 cat <<EOF
-$(_bold "cac") — Claude Code environment manager
+$(_bold "cac") — Isolate, protect, and manage your Claude Code
 
 $(_bold "cac claude") — version management
   install [latest|<ver>]   Install a Claude Code version

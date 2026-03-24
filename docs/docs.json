@@ -1,0 +1,85 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "cac",
+  "description": "Isolate, protect, and manage your Claude Code",
+  "theme": "venus",
+  "colors": {
+    "primary": "#D97706",
+    "light": "#FBBF24",
+    "dark": "#B45309"
+  },
+  "logo": {
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg"
+  },
+  "favicon": "/images/favicon.png",
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "url": "https://github.com/nmhjklnm/cac"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/nmhjklnm/cac"
+    }
+  },
+  "tabs": [
+    {
+      "id": "guides",
+      "name": "Guides",
+      "isDefaultHidden": true
+    },
+    {
+      "id": "reference",
+      "name": "Reference",
+      "isDefaultHidden": true
+    }
+  ],
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": [
+          "index",
+          "quickstart",
+          "concepts"
+        ]
+      },
+      {
+        "group": "Commands",
+        "pages": [
+          "commands/claude",
+          "commands/env",
+          "commands/self",
+          "commands/docker"
+        ]
+      }
+    ],
+    "tabs": {
+      "guides": [
+        {
+          "group": "Guides",
+          "pages": [
+            "guides/proxy-setup",
+            "guides/api-key-users",
+            "guides/docker-mode",
+            "guides/migrating"
+          ]
+        }
+      ],
+      "reference": [
+        {
+          "group": "Reference",
+          "pages": [
+            "reference/file-layout",
+            "reference/how-it-works",
+            "reference/privacy-layers"
+          ]
+        }
+      ]
+    }
+  }
+}

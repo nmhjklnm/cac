@@ -1,10 +1,10 @@
 <div align="center">
 
-# cac — Claude Code Environment Manager
+# cac
 
-**Claude Code 小雨伞** — 给 Claude Code 包一层隐私保护。无感运行，零侵入。
+**Claude Code 小雨伞** — Isolate, protect, and manage your Claude Code.
 
-像 [uv](https://github.com/astral-sh/uv) 管理 Python 一样管理 Claude Code：版本、配置、身份、代理，一个命令搞定。
+版本、配置、身份、代理，一个命令搞定。
 
 **[中文](#中文) | [English](#english)**
 
@@ -199,7 +199,7 @@ cac docker port 6287 # 端口转发
 
 ### Overview
 
-**cac** is a Claude Code environment manager — like [uv](https://github.com/astral-sh/uv) for Python:
+**cac** — Isolate, protect, and manage your Claude Code:
 
 - **Version management** — install, switch, rollback Claude Code versions
 - **Environment isolation** — independent `.claude` config + identity + proxy per environment

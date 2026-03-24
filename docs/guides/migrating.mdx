@@ -1,0 +1,54 @@
+---
+title: "Migrating from older cac"
+description: "Update your workflow from the old command structure."
+icon: "arrow-right"
+---
+
+If you used cac before the environment manager update, here's what changed.
+
+## Command mapping
+
+| Old command | New command | Notes |
+|:---|:---|:---|
+| `cac setup` | — | No longer needed. Auto-initializes on first use. |
+| `cac add us1 proxy` | `cac env create us1 -p proxy` | Proxy is now a `-p` flag, not a positional arg. |
+| `cac us1` | `cac us1` | Unchanged — shortcut for `cac env activate us1`. |
+| `cac ls` | `cac ls` | Unchanged — shortcut for `cac env ls`. |
+| `cac check` | `cac env check` | Moved under `env` subcommand. |
+| `cac stop` | `cac env deactivate` | Renamed. Deactivates the environment entirely. |
+| `cac -c` | `cac env activate <name>` | Re-activate by name instead. |
+| `cac relay on/off` | — | Relay is now automatic (TUN auto-detected). |
+| `cac delete` | `cac self delete` | Moved under `self` subcommand. |
+
+## Deprecation warnings
+
+All old commands still work but print a warning with the new equivalent:
+
+```
+$ cac add us1 proxy
+warning: 'cac add' → 'cac env create <name> -p <proxy>'
+
+$ cac stop
+warning: 'cac stop' → 'cac env deactivate'
+```
+
+## New capabilities
+
+| Feature | Command |
+|:---|:---|
+| Install Claude Code versions | `cac claude install latest` |
+| Pin environment to a version | `cac claude pin 2.1.81` |
+| Create env without proxy | `cac env create personal` |
+| Auto-install versions | `cac env create work -c 2.1.81` |
+| Update cac | `cac self update` |
+
+## Existing environments
+
+Your existing `~/.cac/envs/` environments continue to work. They will show `claude: system` in `cac ls` since they don't have a pinned version. You can pin them:
+
+```bash
+cac us1                      # activate old env
+cac claude pin 2.1.81        # pin to a managed version
+```
+
+The `.claude` isolation directory (`~/.cac/envs/<name>/.claude/`) is created automatically on next activation if it doesn't exist yet.

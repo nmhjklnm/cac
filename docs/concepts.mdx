@@ -1,0 +1,92 @@
+---
+title: "Concepts"
+description: "How cac organizes versions, environments, and isolation."
+---
+
+## Versions
+
+A **version** is a Claude Code binary managed by cac. Binaries are downloaded from Anthropic's official distribution and verified with SHA256 checksums.
+
+```
+~/.cac/versions/
+├── 2.1.81/claude      # specific version
+├── 2.1.80/claude      # another version
+└── .latest            # tracks which version is "latest"
+```
+
+You can have multiple versions installed simultaneously. Each environment can pin a different version.
+
+```bash
+cac claude install latest
+cac claude install 2.1.81
+cac claude ls
+```
+
+## Environments
+
+An **environment** is a complete, isolated context for running Claude Code. It includes:
+
+| Component | What's isolated |
+|:---|:---|
+| `.claude/` config | Sessions, settings, project memory, auth tokens |
+| Device identity | UUID, hostname, MAC address, machine ID, stable ID |
+| Claude Code version | Pinned binary (or system default) |
+| Proxy | Optional network route |
+| mTLS certificate | Per-environment client cert signed by cac's CA |
+
+```
+~/.cac/envs/work/
+├── .claude/            # isolated CLAUDE_CONFIG_DIR
+├── proxy               # proxy URL (optional)
+├── version             # pinned Claude Code version
+├── uuid                # fake hardware UUID
+├── hostname            # fake hostname
+├── mac_address         # fake MAC
+├── machine_id          # fake /etc/machine-id
+├── stable_id           # fake statsig ID
+├── user_id             # fake user ID
+├── client_cert.pem     # mTLS client certificate
+└── type                # "local" or "container"
+```
+
+## Activation
+
+Activating an environment is **global** — it affects all terminals and all project directories. This is by design: your identity and proxy route are per-user concerns, not per-project.
+
+```bash
+cac work              # activate "work" environment
+cac env deactivate    # go back to unprotected mode
+```
+
+When activated, the cac wrapper intercepts every `claude` invocation and applies the environment's settings.
+
+## Proxy is optional
+
+Two types of users:
+
+| User type | Setup | What cac does |
+|:---|:---|:---|
+| **Proxy user** | `cac env create work -p proxy` | Fingerprint isolation + proxy routing + telemetry blocking |
+| **API key user** | `cac env create work` | Fingerprint isolation + telemetry blocking (keeps `ANTHROPIC_API_KEY`) |
+
+When no proxy is configured, cac preserves your `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_AUTH_TOKEN` environment variables. When a proxy is configured, these are cleared to force OAuth authentication through the proxy.
+
+## Auto-install
+
+When you reference a version that isn't installed yet, cac downloads it automatically — just like `uv` auto-installs Python versions:
+
+```bash
+# Version 2.1.81 not installed? cac downloads it first, then creates the env.
+cac env create work -c 2.1.81
+```
+
+## Auto-relay
+
+If cac detects TUN-mode proxy software (Clash, Surge, sing-box) running on your system, it automatically starts a local TCP relay. This prevents the double-proxy problem where TUN wraps cac's proxy traffic.
+
+```
+claude ──► wrapper ──► relay (127.0.0.1) ──► remote proxy ──► API
+                        ↑ loopback bypasses TUN
+```
+
+No user action needed — relay activates and deactivates automatically.

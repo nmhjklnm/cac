@@ -1,0 +1,31 @@
+---
+title: "cac self"
+sidebarTitle: "self"
+description: "Update or uninstall cac itself."
+icon: "gear"
+---
+
+## update
+
+Update cac to the latest version. Detects the install method automatically.
+
+```bash
+cac self update
+```
+
+| Install method | What happens |
+|:---|:---|
+| npm | Runs `npm update -g claude-cac` |
+| bash | Downloads latest binary from GitHub, regenerates wrapper and shims |
+
+## delete
+
+Completely uninstall cac. Removes `~/.cac/`, PATH entries from shell rc files, and all managed data.
+
+```bash
+cac self delete
+```
+
+<Danger>
+This removes all environments, installed Claude Code versions, certificates, and configuration. This action cannot be undone.
+</Danger>

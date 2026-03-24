@@ -1,0 +1,62 @@
+---
+title: "cac claude"
+sidebarTitle: "claude"
+description: "Claude Code version management."
+icon: "download"
+---
+
+Manage Claude Code binary versions. Binaries are downloaded from Anthropic's official distribution with SHA256 checksum verification.
+
+## install
+
+Download and install a Claude Code version.
+
+```bash
+cac claude install latest
+cac claude install 2.1.81
+```
+
+If the version is already installed, it's a no-op. Downloads show a progress bar.
+
+When you use `-c latest` in `cac env create`, the version is resolved and auto-installed — you don't need to run `install` first.
+
+## ls
+
+List all installed Claude Code versions.
+
+```bash
+cac claude ls
+```
+
+```
+Installed Claude Code versions:
+
+  2.1.81 (latest) — 2 environment(s)
+  2.1.80
+
+  System: /root/.local/bin/claude (2.1.81)
+```
+
+Shows which version is marked as `latest`, how many environments use each version, and the system-installed Claude Code path if present.
+
+## pin
+
+Pin the current active environment to a specific version.
+
+```bash
+cac claude pin 2.1.81
+```
+
+This writes the version to `~/.cac/envs/<name>/version`. The wrapper resolves this file at launch time, so the change takes effect on the next `claude` invocation.
+
+## uninstall
+
+Remove an installed version. Fails if any environment is using it.
+
+```bash
+cac claude uninstall 2.1.80
+```
+
+<Warning>
+You cannot uninstall a version that is pinned by any environment. Remove or re-pin those environments first.
+</Warning>
