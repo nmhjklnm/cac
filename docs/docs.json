@@ -27,6 +27,21 @@
     }
   },
   "rounded": "default",
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "claude",
+      "chatgpt",
+      {
+        "title": "GitHub Issues",
+        "description": "Report a bug or request a feature",
+        "icon": "github",
+        "iconType": "brands",
+        "href": "https://github.com/nmhjklnm/cac/issues"
+      }
+    ]
+  },
   "tabs": [
     {
       "id": "guides",
