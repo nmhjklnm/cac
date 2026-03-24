@@ -10,13 +10,13 @@ case "$1" in
     ls|list)            _env_cmd_ls         ;;
     -v|--version)       cmd_version         ;;
     help|--help|-h)     cmd_help            ;;
-    # ── deprecated (shims) ──
-    add)                echo "$(_yellow "warning:") 'cac add' is deprecated, use 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
+    # ── deprecated (shims with warnings) ──
+    add)                echo "$(_yellow "warning:") 'cac add' → 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
     setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes" >&2 ;;
-    check)              echo "$(_yellow "warning:") 'cac check' moved to 'cac env check'" >&2; cmd_check ;;
-    relay)              echo "$(_yellow "warning:") 'cac relay' moved to 'cac env relay'" >&2; cmd_relay "${@:2}" ;;
-    stop)               echo "$(_yellow "warning:") 'cac stop' moved to 'cac env stop'" >&2; cmd_stop ;;
-    resume|-c)          echo "$(_yellow "warning:") use 'cac env resume'" >&2; cmd_continue ;;
-    delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' moved to 'cac self delete'" >&2; cmd_delete ;;
+    check)              echo "$(_yellow "warning:") 'cac check' → 'cac env check'" >&2; cmd_check ;;
+    stop)               echo "$(_yellow "warning:") 'cac stop' → 'cac env deactivate'" >&2; _env_cmd_deactivate ;;
+    resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
+    relay)              echo "$(_yellow "warning:") relay is now automatic (TUN auto-detected)" >&2 ;;
+    delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;
     *)                  _env_cmd_activate "$1" ;;
 esac

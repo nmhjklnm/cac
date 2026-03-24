@@ -170,9 +170,17 @@ if [[ -n "$PROXY" ]] && [[ -f "$_hb_cert" ]] && [[ -f "$_hb_key" ]]; then
     sleep 0.8
 fi
 
-# ── Relay 本地中转（仅代理模式）──
+# ── Relay 本地中转（自动：有代理 + 检测到 TUN 时启用）──
 _relay_active=false
-if [[ -n "$PROXY" ]] && [[ -f "$_env_dir/relay" ]] && [[ "$(tr -d '[:space:]' < "$_env_dir/relay")" == "on" ]]; then
+_tun_detected=false
+if [[ -n "$PROXY" ]]; then
+    # Auto-detect TUN interfaces (utun* on macOS, tun* on Linux)
+    if ip -o link show 2>/dev/null | grep -qE 'tun[0-9]' || \
+       ifconfig 2>/dev/null | grep -qE '^(utun|tun)[0-9]'; then
+        _tun_detected=true
+    fi
+fi
+if [[ -n "$PROXY" ]] && [[ "$_tun_detected" == "true" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"

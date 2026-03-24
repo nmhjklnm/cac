@@ -153,16 +153,26 @@ _env_cmd_activate() {
     echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
 }
 
+_env_cmd_deactivate() {
+    if [[ ! -f "$CAC_DIR/current" ]]; then
+        echo "$(_dim "no active environment")"
+        return
+    fi
+    local current; current=$(_current_env)
+    rm -f "$CAC_DIR/current"
+    touch "$CAC_DIR/stopped"
+    _relay_stop 2>/dev/null || true
+    echo "$(_green_bold "Deactivated") $(_bold "$current") — claude runs unprotected"
+}
+
 cmd_env() {
     case "${1:-help}" in
-        create)     _env_cmd_create "${@:2}" ;;
-        ls|list)    _env_cmd_ls ;;
-        rm|remove)  _env_cmd_rm "${@:2}" ;;
-        activate)   _env_cmd_activate "${@:2}" ;;
-        check)      cmd_check ;;
-        relay)      cmd_relay "${@:2}" ;;
-        stop)       cmd_stop ;;
-        resume)     cmd_continue ;;
+        create)       _env_cmd_create "${@:2}" ;;
+        ls|list)      _env_cmd_ls ;;
+        rm|remove)    _env_cmd_rm "${@:2}" ;;
+        activate)     _env_cmd_activate "${@:2}" ;;
+        deactivate)   _env_cmd_deactivate ;;
+        check)        cmd_check ;;
         help|-h|--help)
             echo "$(_bold "cac env") — environment management"
             echo
@@ -170,9 +180,8 @@ cmd_env() {
             echo "  $(_bold "ls")              List all environments"
             echo "  $(_bold "rm") <name>       Remove an environment"
             echo "  $(_bold "activate") <name> Activate (shortcut: cac <name>)"
+            echo "  $(_bold "deactivate")      Deactivate — claude runs unprotected"
             echo "  $(_bold "check")           Verify current environment"
-            echo "  $(_bold "relay") on|off    Local relay (bypass TUN)"
-            echo "  $(_bold "stop") / $(_bold "resume")  Pause / resume protection"
             ;;
         *) _die "unknown: cac env $1" ;;
     esac

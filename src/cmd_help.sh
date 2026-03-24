@@ -15,9 +15,8 @@ $(_bold "cac env") — environment management
   ls                        List all environments
   rm <name>                 Remove an environment
   activate <name>           Activate (shortcut: cac <name>)
+  deactivate                Deactivate — claude runs unprotected
   check                     Verify current environment
-  relay on|off|status       Local relay (bypass TUN)
-  stop / resume             Pause / resume protection
 
 $(_bold "cac self") — self-management
   update                    Update cac to the latest version
@@ -30,18 +29,12 @@ $(_bold "Shortcuts:")
   cac <name>                = cac env activate <name>
   cac ls                    = cac env ls
 
-$(_bold "Proxy format:")
-  host:port:user:pass       Authenticated (auto-detect protocol)
-  host:port                 Unauthenticated
-  socks5://u:p@host:port    Explicit protocol
-
 $(_bold "Examples:")
   cac claude install latest
   cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81
   cac env create personal
   cac work
-  cac claude pin latest
+  cac env deactivate
   cac env check
-  cac self update
 EOF
 }
