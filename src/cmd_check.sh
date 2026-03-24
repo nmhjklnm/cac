@@ -55,8 +55,8 @@ cmd_check() {
             fi
         fi
 
-        # 冲突检测
-        local conflict_resolved=true
+        # 冲突检测（仅代理连通时才有意义）
+        if [[ -n "$proxy_ip" ]]; then
         local os; os=$(_detect_os)
         local has_conflict=false
         local tun_procs="clash|mihomo|sing-box|surge|shadowrocket|v2ray|xray|hysteria|tuic|nekoray"
@@ -98,6 +98,7 @@ cmd_check() {
                 local proxy_host="${proxy_hp%%:*}"
                 problems+=("代理冲突：需在代理软件中为 $proxy_host 添加 DIRECT 规则")
             fi
+        fi
         fi
     else
         summary_parts+=("API Key 模式")

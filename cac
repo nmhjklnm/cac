@@ -10,7 +10,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ━━━ utils.sh ━━━
 # ── utils: 颜色、读写、UUID、proxy 解析 ───────────────────────
 
-CAC_VERSION="1.1.9"
+CAC_VERSION="1.2.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -1749,8 +1749,8 @@ cmd_check() {
             fi
         fi
 
-        # 冲突检测
-        local conflict_resolved=true
+        # 冲突检测（仅代理连通时才有意义）
+        if [[ -n "$proxy_ip" ]]; then
         local os; os=$(_detect_os)
         local has_conflict=false
         local tun_procs="clash|mihomo|sing-box|surge|shadowrocket|v2ray|xray|hysteria|tuic|nekoray"
@@ -1792,6 +1792,7 @@ cmd_check() {
                 local proxy_host="${proxy_hp%%:*}"
                 problems+=("代理冲突：需在代理软件中为 $proxy_host 添加 DIRECT 规则")
             fi
+        fi
         fi
     else
         summary_parts+=("API Key 模式")
