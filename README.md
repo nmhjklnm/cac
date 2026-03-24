@@ -4,7 +4,7 @@
 
 **Claude Code 小雨伞** — Isolate, protect, and manage your Claude Code.
 
-版本、配置、身份、代理，一个命令搞定。
+Run Claude Code your way — isolated, protected, managed.
 
 **[中文](#中文) | [English](#english)**
 
