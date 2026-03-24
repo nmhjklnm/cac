@@ -1812,7 +1812,7 @@ cmd_check() {
     else
         echo "  Relay 模式 ... 未启用"
         if _detect_tun_active 2>/dev/null; then
-            echo "    $(_yellow "⚠") 检测到 TUN 模式，建议运行 'cac relay on' 绕过冲突"
+            echo "    $(_yellow "⚠") 检测到 TUN 模式（relay 会在启动时自动启用）"
         fi
     fi
 
