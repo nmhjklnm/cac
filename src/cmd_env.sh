@@ -298,6 +298,13 @@ cmd_env() {
             echo "    $(_green "cac") <name>      Switch environment"
             echo
             ;;
-        *) _die "unknown: cac env $1" ;;
+        *)
+            # If first arg is an existing env name, treat as: cac env set <name> ...
+            if [[ -d "$ENVS_DIR/$1" ]] && [[ $# -ge 2 ]]; then
+                _env_cmd_set "$@"
+            else
+                _die "unknown: cac env $1"
+            fi
+            ;;
     esac
 }
