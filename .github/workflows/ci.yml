@@ -172,9 +172,22 @@ jobs:
 
       - name: Download mihomo
         run: |
-          MIHOMO_VER=$(curl -sL https://api.github.com/repos/MetaCubeXD/mihomo/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+')
+          # Get latest stable release from MetaCubeX/mihomo
+          RELEASE_JSON=$(curl -sL "https://api.github.com/repos/MetaCubeX/mihomo/releases" | \
+            python3 -c "import sys,json; releases=[r for r in json.load(sys.stdin) if not r['prerelease']]; print(json.dumps(releases[0]))")
+          MIHOMO_VER=$(echo "$RELEASE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
           echo "mihomo version: $MIHOMO_VER"
-          curl -sL "https://github.com/MetaCubeXD/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-amd64-${MIHOMO_VER}.gz" -o /tmp/mihomo.gz
+          # Find the linux-amd64 gz asset (not -v1, -v2, -v3 variants)
+          ASSET_URL=$(echo "$RELEASE_JSON" | python3 -c "
+          import sys, json
+          assets = json.load(sys.stdin)['assets']
+          for a in assets:
+              n = a['name']
+              if 'linux-amd64' in n and n.endswith('.gz') and '-v1-' not in n and '-v2-' not in n and '-v3-' not in n and 'compatible' not in n:
+                  print(a['browser_download_url']); break
+          ")
+          echo "Downloading: $ASSET_URL"
+          curl -sL "$ASSET_URL" -o /tmp/mihomo.gz
           gunzip /tmp/mihomo.gz
           chmod +x /tmp/mihomo
           /tmp/mihomo -v
