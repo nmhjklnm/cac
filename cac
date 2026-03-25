@@ -1476,9 +1476,9 @@ _env_cmd_create() {
     _timer_start
 
     # Auto-install version (just-in-time, like uv)
-    if [[ -n "$claude_ver" ]]; then
-        claude_ver=$(_ensure_version_installed "$claude_ver") || exit 1
-    fi
+    # No version specified → use latest
+    [[ -z "$claude_ver" ]] && claude_ver="latest"
+    claude_ver=$(_ensure_version_installed "$claude_ver") || exit 1
 
     # Auto-detect proxy protocol
     local proxy_url=""
