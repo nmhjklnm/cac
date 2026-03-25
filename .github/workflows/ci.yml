@@ -188,8 +188,16 @@ jobs:
             - MATCH,DIRECT
           YAML
           # Install mihomo kernel (as current user, not root)
-          bash install.sh mihomo "file://$(pwd)/resources/profiles/config.yaml"
-          echo "✓ clash-for-linux installed"
+          # install.sh may prompt for subscription interactively — ignore exit code
+          bash install.sh mihomo "file://$(pwd)/resources/profiles/config.yaml" </dev/null || true
+          # Verify mihomo binary exists
+          MIHOMO_BIN=$(find ~/clashctl -name mihomo -type f 2>/dev/null | head -1)
+          if [ -z "$MIHOMO_BIN" ]; then
+            echo "FAIL: mihomo binary not found after install"
+            ls -la ~/clashctl/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "✓ clash-for-linux installed ($MIHOMO_BIN)"
 
       - name: Extract cac functions
         run: |
