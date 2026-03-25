@@ -1,5 +1,6 @@
 # ── utils: 颜色、读写、UUID、proxy 解析 ───────────────────────
 
+# shellcheck disable=SC2034  # used in build-concatenated cac script
 CAC_VERSION="1.2.1"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: |
+          shellcheck -s bash -S warning \
+            src/utils.sh \
+            src/cmd_*.sh \
+            src/dns_block.sh \
+            src/mtls.sh \
+            src/templates.sh \
+            src/main.sh \
+            build.sh
+
+  build-check:
+    name: Build consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild and check for drift
+        run: |
+          cp cac cac.before
+          bash build.sh
+          if ! diff -q cac.before cac >/dev/null 2>&1; then
+            echo "::error::Built 'cac' differs from committed version. Run 'bash build.sh' and commit the result."
+            diff cac.before cac || true
+            exit 1
+          fi
+          echo "✓ Build output matches committed file"
+
+  js-check:
+    name: JS syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check JS files parse correctly
+        run: |
+          node --check src/relay.js
+          node --check src/fingerprint-hook.js
+          echo "✓ All JS files parse successfully"

@@ -24,8 +24,8 @@ _relay_start() {
     disown
 
     # 等待 relay 就绪
-    local i
-    for i in {1..30}; do
+    local _i
+    for _i in {1..30}; do
         (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null && break
         sleep 0.1
     done
@@ -46,8 +46,8 @@ _relay_stop() {
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null
             # 等待进程退出
-            local i
-            for i in {1..20}; do
+            local _i
+            for _i in {1..20}; do
                 kill -0 "$pid" 2>/dev/null || break
                 sleep 0.1
             done

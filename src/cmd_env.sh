@@ -106,7 +106,8 @@ _env_cmd_ls() {
         else
             printf "    %s\n" "$name"
         fi
-        local details="claude: $(_cyan "$ver")  type: $etype"
+        local details
+        details="claude: $(_cyan "$ver")  type: $etype"
         [[ -n "$proxy" ]] && details="proxy: $proxy  $details"
         printf "      %s\n" "$details"
     done
@@ -120,7 +121,7 @@ _env_cmd_rm() {
     local current; current=$(_current_env)
     [[ "$name" != "$current" ]] || _die "cannot remove active environment $(_cyan "'$name'")\n  switch to another environment first"
 
-    rm -rf "$ENVS_DIR/$name"
+    rm -rf "${ENVS_DIR:?}/$name"
     echo "$(_green_bold "Removed") environment $(_cyan "$name")"
 }
 

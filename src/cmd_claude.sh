@@ -92,7 +92,7 @@ _claude_cmd_uninstall() {
     local count; count=$(_envs_using_version "$ver")
     [[ "$count" -eq 0 ]] || _die "version $(_cyan "$ver") in use by $count environment(s)"
 
-    rm -rf "$VERSIONS_DIR/$ver"
+    rm -rf "${VERSIONS_DIR:?}/$ver"
     echo "$(_green_bold "Uninstalled") Claude Code $(_cyan "$ver")"
 }
 
