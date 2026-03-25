@@ -83,11 +83,12 @@ cac env create work -c 2.1.81
 
 ## 自动中继
 
-如果 cac 检测到系统中运行了 TUN 模式的代理软件（Clash、Surge、sing-box），它会自动启动本地 TCP 中继。这可以防止 TUN 包裹 cac 代理流量导致的双重代理问题。
+配置了代理时，cac 始终在 `127.0.0.1` 上启动本地 TCP 中继。如果检测到 TUN 模式的代理软件（Clash、Surge、Shadowrocket、sing-box），cac 还会自动为上游代理 IP 添加直连路由，确保中继流量绕过 TUN 接口。
 
 ```
 claude ──► wrapper ──► relay (127.0.0.1) ──► remote proxy ──► API
                         ↑ 回环流量绕过 TUN
+                        ↑ 直连路由确保上游可达
 ```
 
-无需用户操作——中继会自动激活和停止。
+无需用户操作——中继和路由完全自动管理。

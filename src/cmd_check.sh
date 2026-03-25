@@ -83,7 +83,7 @@ cmd_check() {
                 if _relay_ensure_route "$proxy"; then
                     summary_parts+=("TUN 直连路由 ✓（已自动修复）")
                 else
-                    problems+=("TUN 活跃但直连路由缺失 — 运行 'cac check' 时加 sudo 或手动执行 'cac relay on --route'")
+                    problems+=("TUN 活跃但直连路由缺失 — claude 启动时将自动添加（需 sudo），或手动执行 sudo route add -host <proxy_ip> <gateway>")
                 fi
             fi
         fi

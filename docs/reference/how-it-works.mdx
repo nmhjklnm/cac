@@ -33,7 +33,8 @@ claude (user types)
   │
   ├─ Auto-sync relay.js + JS hooks (no re-setup after upgrade)
   ├─ [if proxy] Health check bypass (in-process interception)
-  ├─ [if proxy + TUN] Start auto-relay (bypasses TUN automatically)
+  ├─ [if proxy] Start auto-relay on 127.0.0.1
+  ├─ [if proxy + TUN] Add direct route for upstream proxy IP
   │
   ▼
 ~/.cac/versions/<ver>/claude (real binary)

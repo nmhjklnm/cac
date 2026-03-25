@@ -83,11 +83,12 @@ cac env create work -c 2.1.81
 
 ## Auto-relay
 
-If cac detects TUN-mode proxy software (Clash, Surge, sing-box) running on your system, it automatically starts a local TCP relay. This prevents the double-proxy problem where TUN wraps cac's proxy traffic.
+When a proxy is configured, cac always starts a local TCP relay on `127.0.0.1`. If TUN-mode proxy software (Clash, Surge, Shadowrocket, sing-box) is detected, cac also adds a direct route for the upstream proxy IP, ensuring relay traffic bypasses the TUN interface.
 
 ```
 claude ──► wrapper ──► relay (127.0.0.1) ──► remote proxy ──► API
                         ↑ loopback bypasses TUN
+                        ↑ direct route ensures upstream reachability
 ```
 
-No user action needed — relay activates and deactivates automatically.
+No user action needed — relay and routing are fully automatic.

@@ -142,14 +142,8 @@ _env_cmd_activate() {
     _update_statsig "$(_read "$ENVS_DIR/$name/stable_id")"
     _update_claude_json_user_id "$(_read "$ENVS_DIR/$name/user_id")"
 
-    # Relay lifecycle
+    # Relay: 停止旧 relay（切换环境时清理，wrapper 启动时会重新启动）
     _relay_stop 2>/dev/null || true
-    if [[ -f "$ENVS_DIR/$name/relay" ]] && [[ "$(_read "$ENVS_DIR/$name/relay")" == "on" ]]; then
-        if _relay_start "$name" 2>/dev/null; then
-            local rport; rport=$(_read "$CAC_DIR/relay.port")
-            echo "  $(_green "+") relay: 127.0.0.1:$rport"
-        fi
-    fi
 
     local elapsed; elapsed=$(_timer_elapsed)
     echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
