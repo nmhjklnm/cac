@@ -1518,6 +1518,15 @@ _env_cmd_create() {
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
+    # Auto-activate
+    echo "$name" > "$CAC_DIR/current"
+    rm -f "$CAC_DIR/stopped"
+    if [[ -d "$env_dir/.claude" ]]; then
+        export CLAUDE_CONFIG_DIR="$env_dir/.claude"
+    fi
+    _update_statsig "$(_read "$env_dir/stable_id")" 2>/dev/null || true
+    _update_claude_json_user_id "$(_read "$env_dir/user_id")" 2>/dev/null || true
+
     local elapsed; elapsed=$(_timer_elapsed)
     echo
     echo "  $(_green_bold "Created") $(_bold "$name") $(_dim "in $elapsed")"
@@ -1527,7 +1536,7 @@ _env_cmd_create() {
     [[ "$bypass" == "true" ]] && echo "  $(_green "+") bypass   $(_cyan "enabled")"
     echo "  $(_green "+") config   $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
-    echo "  Activate: $(_green "cac $name")"
+    echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
     echo
 }
 
@@ -1539,24 +1548,16 @@ _env_cmd_ls() {
     fi
 
     local current; current=$(_current_env)
-    local stopped=false
-    [[ -f "$CAC_DIR/stopped" ]] && stopped=true
 
-    local count=0
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
-        (( count++ )) || true
         local name; name=$(basename "$env_dir")
         local proxy; proxy=$(_read "$env_dir/proxy" "")
         local ver; ver=$(_read "$env_dir/version" "system")
         local etype; etype=$(_read "$env_dir/type" "local")
 
         if [[ "$name" == "$current" ]]; then
-            if [[ "$stopped" == "true" ]]; then
-                printf "  $(_yellow "■") $(_bold "$name") $(_red "(stopped)")\n"
-            else
-                printf "  $(_green "▶") $(_bold "$name") $(_green "(active)")\n"
-            fi
+            printf "  $(_green "▶") $(_bold "$name") $(_green "(active)")\n"
         else
             printf "  $(_dim "○") %s\n" "$name"
         fi
@@ -1624,26 +1625,14 @@ _env_cmd_activate() {
     echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
 }
 
-_env_cmd_deactivate() {
-    if [[ ! -f "$CAC_DIR/current" ]]; then
-        echo "$(_dim "no active environment")"
-        return
-    fi
-    local current; current=$(_current_env)
-    rm -f "$CAC_DIR/current"
-    touch "$CAC_DIR/stopped"
-    _relay_stop 2>/dev/null || true
-    echo "$(_green_bold "Deactivated") $(_bold "$current") — claude runs unprotected"
-}
-
 cmd_env() {
     case "${1:-help}" in
         create)       _env_cmd_create "${@:2}" ;;
         ls|list)      _env_cmd_ls ;;
         rm|remove)    _env_cmd_rm "${@:2}" ;;
         activate)     _env_cmd_activate "${@:2}" ;;
-        deactivate)   _env_cmd_deactivate ;;
         check)        cmd_check "${@:2}" ;;
+        deactivate)   echo "$(_yellow "warning:") deactivate has been removed — switch with 'cac <name>' or uninstall with 'cac self delete'" >&2 ;;
         help|-h|--help)
             echo
             echo "  $(_bold "cac env") — environment management"
@@ -1651,9 +1640,8 @@ cmd_env() {
             echo "    $(_green "create") <name> [-p proxy] [-c ver] [--bypass]"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
-            echo "    $(_green "activate") <name> Activate (shortcut: cac <name>)"
-            echo "    $(_green "deactivate")      Deactivate"
             echo "    $(_green "check")           Verify current environment"
+            echo "    $(_green "cac") <name>      Switch environment"
             echo
             ;;
         *) _die "unknown: cac env $1" ;;
@@ -1884,14 +1872,8 @@ cmd_check() {
 
     local current; current=$(_current_env)
 
-    if [[ -f "$CAC_DIR/stopped" ]]; then
-        echo
-        echo "  $(_red "✗") cac is stopped — run $(_green "cac <name>") to resume"
-        echo
-        return
-    fi
     if [[ -z "$current" ]]; then
-        echo "error: no active environment — run $(_green "cac <name>")" >&2; exit 1
+        echo "error: no active environment — run $(_green "cac env create <name>")" >&2; exit 1
     fi
 
     local env_dir="$ENVS_DIR/$current"
@@ -2881,8 +2863,7 @@ cmd_help() {
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
     echo "    $(_green "cac env check")               Verify current environment"
-    echo "    $(_green "cac") <name>                  Activate environment (shortcut)"
-    echo "    $(_green "cac env deactivate")          Deactivate"
+    echo "    $(_green "cac") <name>                  Switch environment"
     echo
 
     echo "  $(_bold "Version")"
@@ -2925,7 +2906,7 @@ case "$1" in
     add)                echo "$(_yellow "warning:") 'cac add' → 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
     setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes" >&2 ;;
     check)              echo "$(_yellow "warning:") 'cac check' → 'cac env check'" >&2; cmd_check ;;
-    stop)               echo "$(_yellow "warning:") 'cac stop' → 'cac env deactivate'" >&2; _env_cmd_deactivate ;;
+    stop)               echo "$(_yellow "warning:") 'cac stop' has been removed — switch with 'cac <name>'" >&2 ;;
     resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
     relay)              echo "$(_yellow "warning:") relay is now automatic (TUN auto-detected)" >&2 ;;
     delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;

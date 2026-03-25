@@ -10,8 +10,7 @@ cmd_help() {
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
     echo "    $(_green "cac env check")               Verify current environment"
-    echo "    $(_green "cac") <name>                  Activate environment (shortcut)"
-    echo "    $(_green "cac env deactivate")          Deactivate"
+    echo "    $(_green "cac") <name>                  Switch environment"
     echo
 
     echo "  $(_bold "Version")"

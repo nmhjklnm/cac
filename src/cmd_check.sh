@@ -8,14 +8,8 @@ cmd_check() {
 
     local current; current=$(_current_env)
 
-    if [[ -f "$CAC_DIR/stopped" ]]; then
-        echo
-        echo "  $(_red "✗") cac is stopped — run $(_green "cac <name>") to resume"
-        echo
-        return
-    fi
     if [[ -z "$current" ]]; then
-        echo "error: no active environment — run $(_green "cac <name>")" >&2; exit 1
+        echo "error: no active environment — run $(_green "cac env create <name>")" >&2; exit 1
     fi
 
     local env_dir="$ENVS_DIR/$current"

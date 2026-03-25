@@ -14,7 +14,7 @@ case "$1" in
     add)                echo "$(_yellow "warning:") 'cac add' → 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
     setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes" >&2 ;;
     check)              echo "$(_yellow "warning:") 'cac check' → 'cac env check'" >&2; cmd_check ;;
-    stop)               echo "$(_yellow "warning:") 'cac stop' → 'cac env deactivate'" >&2; _env_cmd_deactivate ;;
+    stop)               echo "$(_yellow "warning:") 'cac stop' has been removed — switch with 'cac <name>'" >&2 ;;
     resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
     relay)              echo "$(_yellow "warning:") relay is now automatic (TUN auto-detected)" >&2 ;;
     delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;
