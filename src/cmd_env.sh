@@ -207,8 +207,18 @@ _env_cmd_set() {
     local name="" key="" value="" remove=false
     local known_keys="proxy version bypass"
 
-    if [[ $# -lt 1 ]]; then
-        _die "usage: cac env set [name] <proxy|version|bypass> <value|--remove>"
+    if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
+        echo
+        echo "  $(_bold "cac env set") — modify environment configuration"
+        echo
+        echo "    $(_green "set") [name] proxy <url>           Set proxy"
+        echo "    $(_green "set") [name] proxy --remove        Remove proxy"
+        echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+        echo "    $(_green "set") [name] bypass on|off         Toggle bypass mode"
+        echo
+        echo "  $(_dim "If name is omitted, uses the current active environment.")"
+        echo
+        return
     fi
 
     # Is first arg a known key or an env name?
