@@ -236,15 +236,22 @@ _find_real_claude() {
 }
 
 _detect_rc_file() {
-    if [[ -f "$HOME/.zshrc" ]]; then
-        echo "$HOME/.zshrc"
-    elif [[ -f "$HOME/.bashrc" ]]; then
-        echo "$HOME/.bashrc"
-    elif [[ -f "$HOME/.bash_profile" ]]; then
-        echo "$HOME/.bash_profile"
-    else
-        echo ""
-    fi
+    local shell_name
+    shell_name=$(basename "${SHELL:-/bin/bash}")
+    case "$shell_name" in
+        zsh)
+            [[ -f "$HOME/.zshrc" ]] && { echo "$HOME/.zshrc"; return; }
+            ;;
+        bash)
+            [[ -f "$HOME/.bashrc" ]] && { echo "$HOME/.bashrc"; return; }
+            [[ -f "$HOME/.bash_profile" ]] && { echo "$HOME/.bash_profile"; return; }
+            ;;
+    esac
+    # Fallback: try common rc files
+    [[ -f "$HOME/.bashrc" ]] && { echo "$HOME/.bashrc"; return; }
+    [[ -f "$HOME/.zshrc" ]] && { echo "$HOME/.zshrc"; return; }
+    [[ -f "$HOME/.bash_profile" ]] && { echo "$HOME/.bash_profile"; return; }
+    echo ""
 }
 
 _install_method() {
