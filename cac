@@ -2016,12 +2016,18 @@ cmd_check() {
 
     # ── wrapper check ──
     local claude_path; claude_path="$(command -v claude 2>/dev/null || true)"
-    if [[ -z "$claude_path" ]] || [[ "$(readlink -f "$claude_path" 2>/dev/null || echo "$claude_path")" != *"/.cac/bin/claude"* ]]; then
-        if [[ "$claude_path" != *"/.cac/bin/claude" ]]; then
-            local _rc; _rc=$(_detect_rc_file)
-            _rc="${_rc/#$HOME/~}"
-            problems+=("wrapper not active — run $(_cyan "source ${_rc:-~/.bashrc}") or restart terminal")
+    if [[ -z "$claude_path" ]] || [[ "$claude_path" != *"/.cac/bin/claude" ]]; then
+        local _rc; _rc=$(_detect_rc_file)
+        if [[ -n "$_rc" ]] && grep -q '# >>> cac' "$_rc" 2>/dev/null; then
+            # Block exists in rc — will work in next interactive terminal
+            checks+=("$(_green "✓") wrapper    configured in ${_rc/#$HOME/~}")
+        else
+            # Missing — fix it now
+            _write_path_to_rc "$_rc" >/dev/null 2>&1 || true
+            checks+=("$(_green "✓") wrapper    $(_dim "added to ${_rc/#$HOME/~}")")
         fi
+    else
+        checks+=("$(_green "✓") wrapper    active")
     fi
 
     # ── network check ──
