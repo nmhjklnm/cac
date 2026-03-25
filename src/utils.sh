@@ -186,7 +186,7 @@ _ensure_version_installed() {
     if [[ ! -x "$(_version_binary "$ver")" ]]; then
         echo "Version $(_cyan "$ver") not installed, downloading ..." >&2
         mkdir -p "$VERSIONS_DIR"
-        _download_version "$ver" || return 1
+        _download_version "$ver" >&2 || return 1
         echo "$ver" > "$VERSIONS_DIR/.latest"
         echo >&2
     fi
