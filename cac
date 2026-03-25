@@ -1545,7 +1545,7 @@ _env_cmd_ls() {
     local count=0
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
-        (( count++ ))
+        (( count++ )) || true
         local name; name=$(basename "$env_dir")
         local proxy; proxy=$(_read "$env_dir/proxy" "")
         local ver; ver=$(_read "$env_dir/version" "system")
@@ -1643,7 +1643,7 @@ cmd_env() {
         rm|remove)    _env_cmd_rm "${@:2}" ;;
         activate)     _env_cmd_activate "${@:2}" ;;
         deactivate)   _env_cmd_deactivate ;;
-        check)        cmd_check ;;
+        check)        cmd_check "${@:2}" ;;
         help|-h|--help)
             echo
             echo "  $(_bold "cac env") — environment management"
