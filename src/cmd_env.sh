@@ -205,7 +205,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version bypass"
+    local known_keys="proxy version"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -214,7 +214,6 @@ _env_cmd_set() {
         echo "    $(_green "set") [name] proxy <url>           Set proxy"
         echo "    $(_green "set") [name] proxy --remove        Remove proxy"
         echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
-        echo "    $(_green "set") [name] bypass on|off         Toggle bypass mode"
         echo
         echo "  $(_dim "If name is omitted, uses the current active environment.")"
         echo
@@ -272,19 +271,8 @@ _env_cmd_set() {
             echo "$ver" > "$env_dir/version"
             echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
             ;;
-        bypass)
-            if [[ "$value" == "on" || "$value" == "true" ]]; then
-                _write_env_settings "$env_dir/.claude" "true"
-                echo "$(_green_bold "Set") bypass for $(_bold "$name") → $(_cyan "enabled")"
-            elif [[ "$value" == "off" || "$value" == "false" || "$remove" == "true" ]]; then
-                _write_env_settings "$env_dir/.claude" "false"
-                echo "$(_green_bold "Set") bypass for $(_bold "$name") → $(_dim "disabled")"
-            else
-                _die "usage: cac env set [name] bypass on|off"
-            fi
-            ;;
         *)
-            _die "unknown key '$key' — use proxy, version, or bypass"
+            _die "unknown key '$key' — use proxy or version"
             ;;
     esac
 }
@@ -306,7 +294,6 @@ cmd_env() {
             echo "    $(_green "set") [name] proxy <url>           Set proxy"
             echo "    $(_green "set") [name] proxy --remove        Remove proxy"
             echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
-            echo "    $(_green "set") [name] bypass on|off         Toggle bypass mode"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
