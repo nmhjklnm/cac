@@ -296,10 +296,15 @@ _write_path_to_rc() {
     cat >> "$rc_file" << 'CACEOF'
 
 # >>> cac — Claude Code Cloak >>>
-# Remove existing cac paths then prepend, so cac wrapper always wins
-# even after nvm/pyenv/etc. modify PATH
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | grep -v "$HOME/bin" | tr '\n' ':' | sed 's/:$//')
 export PATH="$HOME/.cac/bin:$HOME/bin:$PATH"
+cac() {
+    command "$HOME/bin/cac" "$@"
+    local _rc=$?
+    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | tr '\n' ':' | sed 's/:$//')
+    export PATH="$HOME/.cac/bin:$HOME/bin:$PATH"
+    return $_rc
+}
 # <<< cac — Claude Code Cloak <<<
 CACEOF
     echo "  ✓ PATH 已写入 $rc_file"
@@ -1363,6 +1368,10 @@ _ensure_initialized() {
     _write_dns_guard_js 2>/dev/null || true
     _write_blocked_hosts 2>/dev/null || true
 
+    # PATH (idempotent — always ensure it's in rc file)
+    local rc_file; rc_file=$(_detect_rc_file)
+    _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
+
     # Rest only needed on first init
     [[ -f "$CAC_DIR/bin/claude" ]] && return 0
 
@@ -1393,10 +1402,6 @@ _ensure_initialized() {
 
     # mTLS CA
     _generate_ca_cert 2>/dev/null || true
-
-    # PATH (idempotent)
-    local rc_file; rc_file=$(_detect_rc_file)
-    _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
 }
 
 # Explicit setup command — runs initialization with verbose output
