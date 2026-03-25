@@ -93,6 +93,7 @@ _relay_add_route() {
         [[ "$current_gw" == "$gateway" ]] && return 0
 
         echo "  添加直连路由：$proxy_ip → $gateway（需要 sudo）"
+        sudo route delete -host "$proxy_ip" >/dev/null 2>&1 || true
         sudo route add -host "$proxy_ip" "$gateway" >/dev/null 2>&1 || return 1
         echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
 
@@ -103,6 +104,7 @@ _relay_add_route() {
         [[ -z "$gateway" ]] && return 1
 
         echo "  添加直连路由：$proxy_ip → $gateway dev $iface（需要 sudo）"
+        sudo ip route del "$proxy_ip/32" 2>/dev/null || true
         sudo ip route add "$proxy_ip/32" via "$gateway" dev "$iface" 2>/dev/null || return 1
         echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
     fi

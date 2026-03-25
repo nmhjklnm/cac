@@ -210,8 +210,10 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
                 echo "[cac] 检测到 TUN，添加直连路由以确保代理连通 ..." >&2
                 _route_ok=false
                 if [[ "$(uname -s)" == "Darwin" ]]; then
+                    sudo route delete -host "$_proxy_host" >/dev/null 2>&1 || true
                     sudo route add -host "$_proxy_host" "$_default_gw" >/dev/null 2>&1 && _route_ok=true
                 else
+                    sudo ip route del "$_proxy_host/32" 2>/dev/null || true
                     sudo ip route add "$_proxy_host/32" via "$_default_gw" dev "$_default_iface" 2>/dev/null && _route_ok=true
                 fi
                 if [[ "$_route_ok" == "true" ]]; then
