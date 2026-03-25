@@ -2,20 +2,19 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" bypass=false
+    local name="" proxy="" claude_ver="" env_type="local"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
-            --bypass)    bypass=true; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--bypass]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -74,7 +73,7 @@ _env_cmd_create() {
     mkdir -p "$env_dir/.claude"
 
     # Initialize settings.json, statusline, and CLAUDE.md
-    _write_env_settings "$env_dir/.claude" "$bypass"
+    _write_env_settings "$env_dir/.claude"
     _write_statusline_script "$env_dir/.claude"
     _write_env_claude_md "$env_dir/.claude" "$name"
 
@@ -95,7 +94,6 @@ _env_cmd_create() {
     echo
     [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
     [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
-    [[ "$bypass" == "true" ]] && echo "  $(_green "+") bypass   $(_cyan "enabled")"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
     echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
@@ -290,7 +288,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--bypass]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver]"
             echo "    $(_green "set") [name] proxy <url>           Set proxy"
             echo "    $(_green "set") [name] proxy --remove        Remove proxy"
             echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"

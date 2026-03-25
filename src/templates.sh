@@ -94,26 +94,9 @@ STATUSLINE_EOF
 }
 
 # 写入 settings.json 到环境 .claude 目录
-# $1 = config_dir, $2 = bypass (true/false)
 _write_env_settings() {
     local config_dir="$1"
-    local bypass="${2:-false}"
-
-    if [[ "$bypass" == "true" ]]; then
-        cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
-{
-  "permissions": {
-    "defaultMode": "bypassPermissions"
-  },
-  "skipDangerousModePermissionPrompt": true,
-  "statusLine": {
-    "type": "command",
-    "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
-  }
-}
-SETTINGS_EOF
-    else
-        cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
+    cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
 {
   "statusLine": {
     "type": "command",
@@ -121,7 +104,6 @@ SETTINGS_EOF
   }
 }
 SETTINGS_EOF
-    fi
 }
 
 # 写入 CLAUDE.md 到环境 .claude 目录
