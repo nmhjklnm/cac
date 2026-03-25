@@ -283,13 +283,15 @@ _write_path_to_rc() {
         _remove_path_from_rc "$rc_file"
     fi
 
-    cat >> "$rc_file" << 'EOF'
+    cat >> "$rc_file" << 'CACEOF'
 
 # >>> cac — Claude Code Cloak >>>
-export PATH="$HOME/bin:$PATH"          # cac 命令
-export PATH="$HOME/.cac/bin:$PATH"     # claude wrapper
+# Remove existing cac paths then prepend, so cac wrapper always wins
+# even after nvm/pyenv/etc. modify PATH
+PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | grep -v "$HOME/bin" | tr '\n' ':' | sed 's/:$//')
+export PATH="$HOME/.cac/bin:$HOME/bin:$PATH"
 # <<< cac — Claude Code Cloak <<<
-EOF
+CACEOF
     echo "  ✓ PATH 已写入 $rc_file"
     return 0
 }
