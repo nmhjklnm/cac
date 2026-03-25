@@ -335,3 +335,188 @@ jobs:
           kill "$(cat /tmp/relay.pid 2>/dev/null)" 2>/dev/null || true
           sleep 1
           echo "✓ Cleanup done"
+
+  test-tun-strict:
+    name: TUN strict (sing-box)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build cac
+        run: bash build.sh
+
+      - name: Extract cac functions
+        run: |
+          awk '/^# ━━━/{found=1} found && /^\[\[ \$# -eq 0 \]\]/{exit} {print}' cac > /tmp/cac-fn.sh
+          echo "✓ Functions extracted"
+
+      - name: Download sing-box
+        run: |
+          SB_VER=$(curl -sL "https://api.github.com/repos/SagerNet/sing-box/releases" | \
+            python3 -c "import sys,json; print([r for r in json.load(sys.stdin) if not r['prerelease']][0]['tag_name'])")
+          echo "sing-box version: $SB_VER"
+          SB_VER_NUM=${SB_VER#v}
+          curl -sL "https://github.com/SagerNet/sing-box/releases/download/${SB_VER}/sing-box-${SB_VER_NUM}-linux-amd64.tar.gz" -o /tmp/sb.tar.gz
+          tar xzf /tmp/sb.tar.gz -C /tmp
+          SB_BIN=$(find /tmp -name sing-box -type f 2>/dev/null | head -1)
+          chmod +x "$SB_BIN"
+          cp "$SB_BIN" /tmp/sing-box
+          /tmp/sing-box version
+          echo "✓ sing-box ready"
+
+      - name: Start test upstream proxy on eth0 IP
+        run: |
+          # Get runner's real IP (non-loopback)
+          REAL_IP=$(ip -4 addr show eth0 | grep -oP 'inet \K[^/]+')
+          echo "Runner real IP: $REAL_IP"
+          echo "$REAL_IP" > /tmp/real_ip
+
+          # Start test HTTP CONNECT proxy on real IP
+          node -e "
+          const net = require('net');
+          net.createServer((c) => {
+            let b = '';
+            c.on('data', (d) => {
+              b += d.toString();
+              if (b.indexOf('\r\n\r\n') === -1) return;
+              const m = b.match(/^CONNECT\s+([^\s:]+):(\d+)\s+HTTP/i);
+              if (m) {
+                c.write('HTTP/1.1 200 OK\r\n\r\n');
+                // Don't actually connect — just prove the proxy is reachable
+                c.destroy();
+              } else {
+                c.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK');
+                c.destroy();
+              }
+            });
+            c.on('error', () => {});
+          }).listen(18080, '$REAL_IP', () => {
+            require('fs').writeFileSync('/tmp/test-proxy.pid', String(process.pid));
+            console.log('test proxy on $REAL_IP:18080');
+          });
+          " &
+          sleep 1
+          echo "✓ Test proxy started on $REAL_IP:18080"
+
+      - name: "Test: relay works BEFORE sing-box TUN"
+        run: |
+          REAL_IP=$(cat /tmp/real_ip)
+          # Relay pointing to test proxy on real IP
+          node src/relay.js 17890 "http://${REAL_IP}:18080" /tmp/relay.pid </dev/null >/tmp/relay.log 2>&1 &
+          sleep 1
+          # This should work — no TUN yet
+          curl -s --proxy http://127.0.0.1:17890 --connect-timeout 5 http://example.com 2>/dev/null || true
+          sleep 0.5
+          echo "--- relay log (before TUN) ---"
+          cat /tmp/relay.log
+          kill "$(cat /tmp/relay.pid)" 2>/dev/null || true
+          echo "✓ Relay works before TUN"
+
+      - name: Start sing-box with strict_route + auto_redirect
+        run: |
+          REAL_IP=$(cat /tmp/real_ip)
+          # Create sing-box config with strict routing (simulates Network Extension)
+          cat > /tmp/sb-config.json << SBJSON
+          {
+            "log": {"level": "info"},
+            "inbounds": [{
+              "type": "tun",
+              "tag": "tun-in",
+              "interface_name": "tun0",
+              "address": ["172.18.0.1/30"],
+              "auto_route": true,
+              "auto_redirect": true,
+              "strict_route": true,
+              "stack": "system"
+            }],
+            "outbounds": [{"type": "direct", "tag": "direct"}],
+            "route": {
+              "auto_detect_interface": true,
+              "rules": [{
+                "inbound": ["tun-in"],
+                "outbound": "direct"
+              }]
+            }
+          }
+          SBJSON
+          sudo /tmp/sing-box run -c /tmp/sb-config.json </dev/null >/tmp/sb.log 2>&1 &
+          sleep 3
+          echo "--- sing-box log ---"
+          tail -10 /tmp/sb.log
+          echo "--- interfaces ---"
+          ip link show tun0 2>/dev/null || echo "tun0 not found"
+          echo "--- routes ---"
+          ip route show default
+          echo "--- iptables/nftables ---"
+          sudo nft list ruleset 2>/dev/null | head -30 || sudo iptables -t mangle -L 2>/dev/null | head -20 || echo "no rules"
+          echo "--- process ---"
+          pgrep -a sing-box || echo "sing-box not running"
+
+      - name: "Test: TUN detected"
+        run: |
+          source /tmp/cac-fn.sh 2>/dev/null
+          if _detect_tun_active; then
+            echo "✓ TUN detected"
+          else
+            echo "⚠ TUN not detected (sing-box may not have created tun0)"
+            ip link show
+          fi
+
+      - name: "Test: relay FAILS with strict TUN (reproduce 502)"
+        run: |
+          REAL_IP=$(cat /tmp/real_ip)
+          # Relay pointing to test proxy on real IP — should FAIL because sing-box intercepts
+          node src/relay.js 17891 "http://${REAL_IP}:18080" /tmp/relay2.pid </dev/null >/tmp/relay2.log 2>&1 &
+          sleep 1
+          curl -s --proxy http://127.0.0.1:17891 --connect-timeout 5 http://example.com 2>/dev/null || true
+          sleep 0.5
+          echo "--- relay log (with strict TUN) ---"
+          cat /tmp/relay2.log
+          echo ""
+          if grep -q "502" /tmp/relay2.log; then
+            echo "✓ 502 reproduced! strict_route blocks relay upstream connection"
+          else
+            echo "⚠ No 502 — strict_route may not block this traffic path"
+          fi
+          kill "$(cat /tmp/relay2.pid)" 2>/dev/null || true
+
+      - name: "Test: route fix attempt"
+        run: |
+          source /tmp/cac-fn.sh 2>/dev/null
+          REAL_IP=$(cat /tmp/real_ip)
+          TEST_PROXY="http://user:pass@${REAL_IP}:18080"
+
+          echo "=== _relay_add_route ==="
+          _relay_add_route "$TEST_PROXY" || echo "⚠ route add failed"
+          echo "--- route ---"
+          ip route show "${REAL_IP}/32" 2>/dev/null || echo "(no /32 route)"
+
+          echo "=== Test relay AFTER route fix ==="
+          node src/relay.js 17892 "http://${REAL_IP}:18080" /tmp/relay3.pid </dev/null >/tmp/relay3.log 2>&1 &
+          sleep 1
+          curl -s --proxy http://127.0.0.1:17892 --connect-timeout 5 http://example.com 2>/dev/null || true
+          sleep 0.5
+          echo "--- relay log (after route fix) ---"
+          cat /tmp/relay3.log
+          echo ""
+          if grep -q "502" /tmp/relay3.log; then
+            echo "✗ 502 persists after route fix — route add is NOT enough for strict_route"
+          else
+            echo "✓ Route fix works — relay connects after route add"
+          fi
+          kill "$(cat /tmp/relay3.pid)" 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo pkill sing-box 2>/dev/null || true
+          kill "$(cat /tmp/test-proxy.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat /tmp/relay.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat /tmp/relay2.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat /tmp/relay3.pid 2>/dev/null)" 2>/dev/null || true
+          sleep 1
+          echo "✓ Cleanup done"
