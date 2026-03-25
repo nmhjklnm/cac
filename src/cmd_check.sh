@@ -146,7 +146,7 @@ cmd_check() {
         echo "    $(_dim "user_id")    $(_read "$env_dir/user_id" "—")"
         echo "    $(_dim "TZ")         $(_read "$env_dir/tz" "—")"
         echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
-        echo "    $(_dim "config")     ${env_dir/#$HOME/~}/.claude/"
+        echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
         echo "  $(_bold "Telemetry") ${env_ok}/${env_total}"
         for var in "${env_vars[@]}"; do
