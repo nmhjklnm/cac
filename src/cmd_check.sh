@@ -75,28 +75,16 @@ cmd_check() {
         fi
 
         if [[ "$has_conflict" == "true" ]]; then
-            # 测试 relay
-            local relay_ok=false
-            if _relay_is_running 2>/dev/null; then
-                local rport; rport=$(_read "$CAC_DIR/relay.port" "")
-                local relay_ip; relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-                [[ -n "$relay_ip" ]] && relay_ok=true
-            elif [[ -f "$CAC_DIR/relay.js" ]]; then
-                local _test_env; _test_env=$(_current_env)
-                if _relay_start "$_test_env" 2>/dev/null; then
-                    local rport; rport=$(_read "$CAC_DIR/relay.port" "")
-                    local relay_ip; relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
-                    _relay_stop 2>/dev/null || true
-                    [[ -n "$relay_ip" ]] && relay_ok=true
-                fi
-            fi
-
-            if [[ "$relay_ok" == "true" ]]; then
-                summary_parts+=("TUN 冲突已绕过")
+            # 检查直连路由是否到位（不依赖 relay 连通性）
+            if _relay_route_ok "$proxy"; then
+                summary_parts+=("TUN 直连路由 ✓")
             else
-                local proxy_hp; proxy_hp=$(_proxy_host_port "$proxy")
-                local proxy_host="${proxy_hp%%:*}"
-                problems+=("代理冲突：需在代理软件中为 $proxy_host 添加 DIRECT 规则")
+                # 尝试自动修复
+                if _relay_ensure_route "$proxy"; then
+                    summary_parts+=("TUN 直连路由 ✓（已自动修复）")
+                else
+                    problems+=("TUN 活跃但直连路由缺失 — 运行 'cac check' 时加 sudo 或手动执行 'cac relay on --route'")
+                fi
             fi
         fi
         fi

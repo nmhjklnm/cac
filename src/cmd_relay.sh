@@ -138,6 +138,52 @@ _detect_tun_active() {
     fi
 }
 
+# 检查上游代理路由是否正确（不需要 sudo）
+# 返回 0=正确, 1=缺失/过期, 2=非 TUN 环境无需路由
+_relay_route_ok() {
+    local proxy="$1"
+    local proxy_host; proxy_host=$(_proxy_host_port "$proxy")
+    proxy_host="${proxy_host%%:*}"
+
+    [[ "$proxy_host" == "127."* || "$proxy_host" == "localhost" ]] && return 0
+
+    local proxy_ip
+    proxy_ip=$(python3 -c "import socket; print(socket.gethostbyname('$proxy_host'))" 2>/dev/null || echo "$proxy_host")
+
+    local os; os=$(_detect_os)
+    if [[ "$os" == "macos" ]]; then
+        local default_gw route_gw
+        default_gw=$(route -n get default 2>/dev/null | awk '/gateway:/{print $2}')
+        route_gw=$(route -n get "$proxy_ip" 2>/dev/null | awk '/gateway:/{print $2}')
+        [[ -z "$default_gw" ]] && return 2
+        [[ "$route_gw" == "$default_gw" ]] && return 0
+        return 1
+    elif [[ "$os" == "linux" ]]; then
+        local default_gw
+        default_gw=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+        [[ -z "$default_gw" ]] && return 2
+        # 检查是否有精确的 /32 路由
+        ip route show "$proxy_ip/32" 2>/dev/null | grep -q via && return 0
+        return 1
+    fi
+    return 2
+}
+
+# 检测 TUN 并自动确保路由正确（wrapper 和 activate 调用）
+_relay_ensure_route() {
+    local proxy="$1"
+    [[ -z "$proxy" ]] && return 0
+
+    # 无 TUN 风险则跳过
+    _detect_tun_active || return 0
+
+    # 路由已正确则跳过
+    _relay_route_ok "$proxy" && return 0
+
+    # 需要修复路由
+    _relay_add_route "$proxy"
+}
+
 # ── 用户命令 ─────────────────────────────────────────────────────
 
 cmd_relay() {

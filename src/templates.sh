@@ -178,6 +178,52 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         echo "$_rport" > "$_relay_port_file"
     fi
 
+    # ── TUN 直连路由（自动检测 + 自动修复）──
+    _proxy_hp="${PROXY##*@}"; _proxy_hp="${_proxy_hp##*://}"
+    _proxy_host="${_proxy_hp%%:*}"
+    if [[ "$_proxy_host" != "127."* && "$_proxy_host" != "localhost" ]]; then
+        # 检测 TUN 是否活跃
+        _tun_active=false
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            _tun_count=$(ifconfig 2>/dev/null | grep -cE '^utun[0-9]+' || echo 0)
+            [[ "$_tun_count" -gt 3 ]] && _tun_active=true
+        else
+            ip link show tun0 >/dev/null 2>&1 && _tun_active=true
+        fi
+
+        if [[ "$_tun_active" == "true" ]]; then
+            # 检查路由是否正确（不需要 sudo）
+            _need_route=false
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                _default_gw=$(route -n get default 2>/dev/null | awk '/gateway:/{print $2}')
+                _route_gw=$(route -n get "$_proxy_host" 2>/dev/null | awk '/gateway:/{print $2}')
+                [[ -n "$_default_gw" && "$_route_gw" != "$_default_gw" ]] && _need_route=true
+            else
+                _default_gw=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+                _default_iface=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+                if [[ -n "$_default_gw" ]] && ! ip route show "$_proxy_host/32" 2>/dev/null | grep -q via; then
+                    _need_route=true
+                fi
+            fi
+
+            if [[ "$_need_route" == "true" ]]; then
+                echo "[cac] 检测到 TUN，添加直连路由以确保代理连通 ..." >&2
+                _route_ok=false
+                if [[ "$(uname -s)" == "Darwin" ]]; then
+                    sudo route add -host "$_proxy_host" "$_default_gw" >/dev/null 2>&1 && _route_ok=true
+                else
+                    sudo ip route add "$_proxy_host/32" via "$_default_gw" dev "$_default_iface" 2>/dev/null && _route_ok=true
+                fi
+                if [[ "$_route_ok" == "true" ]]; then
+                    echo "$_proxy_host" > "$CAC_DIR/relay_route_ip"
+                    echo "[cac] ✓ 路由已添加：$_proxy_host → $_default_gw" >&2
+                else
+                    echo "[cac] ⚠ 路由添加失败，TUN 开启时可能无法连接代理" >&2
+                fi
+            fi
+        fi
+    fi
+
     # 覆盖代理指向本地 relay
     if [[ -f "$_relay_port_file" ]]; then
         _rport=$(tr -d '[:space:]' < "$_relay_port_file")
