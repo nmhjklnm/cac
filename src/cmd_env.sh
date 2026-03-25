@@ -111,37 +111,49 @@ _env_cmd_ls() {
 
     local current; current=$(_current_env)
 
+    # Collect data first to calculate column widths
+    local names=() versions=() proxies=() paths=()
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
-        local name; name=$(basename "$env_dir")
-        local proxy; proxy=$(_read "$env_dir/proxy" "")
-        local ver; ver=$(_read "$env_dir/version" "system")
-        local etype; etype=$(_read "$env_dir/type" "local")
+        names+=("$(basename "$env_dir")")
+        versions+=("$(_read "$env_dir/version" "system")")
+        local p; p=$(_read "$env_dir/proxy" "")
+        if [[ -n "$p" ]] && [[ "$p" == *"://"*"@"* ]]; then
+            p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
+        fi
+        proxies+=("${p:-—}")
+        local ep="${env_dir}.claude/"
+        paths+=("${ep/#$HOME/~}")
+    done
+
+    # Calculate max widths
+    local max_name=4 max_ver=6 max_proxy=5
+    local i
+    for i in "${!names[@]}"; do
+        local nl=${#names[$i]} vl=${#versions[$i]} pl=${#proxies[$i]}
+        (( nl > max_name )) && max_name=$nl
+        (( vl > max_ver )) && max_ver=$vl
+        (( pl > max_proxy )) && max_proxy=$pl
+    done
+    # Cap proxy column
+    (( max_proxy > 40 )) && max_proxy=40
+
+    # Header
+    printf "  $(_dim "  %-${max_name}s  %-${max_ver}s  %-${max_proxy}s  %s")" "NAME" "CLAUDE" "PROXY" "ENV"
+    echo
+
+    # Rows
+    for i in "${!names[@]}"; do
+        local name="${names[$i]}"
+        local ver="${versions[$i]}"
+        local proxy="${proxies[$i]}"
+        local epath="${paths[$i]}"
 
         if [[ "$name" == "$current" ]]; then
-            printf "  $(_green "▶") $(_bold "$name") $(_green "(active)")\n"
+            printf "  $(_green "▶") $(_bold "%-${max_name}s")  $(_cyan "%-${max_ver}s")  %-${max_proxy}s  $(_dim "%s")\n" "$name" "$ver" "$proxy" "$epath"
         else
-            printf "  $(_dim "○") %s\n" "$name"
+            printf "  $(_dim "○") %-${max_name}s  $(_cyan "%-${max_ver}s")  $(_dim "%-${max_proxy}s")  $(_dim "%s")\n" "$name" "$ver" "$proxy" "$epath"
         fi
-
-        # Details line 1: version + type + proxy status
-        local info
-        info="$(_dim "claude") $(_cyan "$ver")"
-        [[ "$etype" != "local" ]] && info="$info  $(_dim "type") $etype"
-        if [[ -n "$proxy" ]]; then
-            # Mask credentials in proxy display
-            local proxy_display="$proxy"
-            if [[ "$proxy" == *"://"*"@"* ]]; then
-                proxy_display=$(echo "$proxy" | sed 's|://[^@]*@|://***@|')
-            fi
-            info="$info  $(_dim "proxy") $proxy_display"
-        fi
-        printf "    %s\n" "$info"
-
-        # Details line 2: config dir path
-        local config_short="${env_dir}.claude/"
-        config_short="${config_short/#$HOME/~}"
-        printf "    $(_dim "env")    %s\n" "$(_dim "$config_short")"
     done
 }
 

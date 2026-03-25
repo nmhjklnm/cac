@@ -97,30 +97,27 @@ _claude_cmd_uninstall() {
 }
 
 _claude_cmd_ls() {
-    echo "$(_bold "Installed Claude Code versions:")"
-    echo
-
     if [[ ! -d "$VERSIONS_DIR" ]] || [[ -z "$(ls -A "$VERSIONS_DIR" 2>/dev/null)" ]]; then
-        echo "  $(_dim "(none — install with 'cac claude install')")"
+        echo "$(_dim "  No versions installed.")"
+        echo "  Run $(_green "cac claude install") to get started."
         return
     fi
 
     local latest; latest=$(_read "$VERSIONS_DIR/.latest" "")
+
+    printf "  $(_dim "%-12s  %-8s  %s")\n" "VERSION" "STATUS" "ENVIRONMENTS"
     for ver_dir in "$VERSIONS_DIR"/*/; do
         [[ -d "$ver_dir" ]] || continue
         local ver; ver=$(basename "$ver_dir")
-        local tag=""; [[ "$ver" == "$latest" ]] && tag=" $(_green "(latest)")"
+        local status=""; [[ "$ver" == "$latest" ]] && status="latest"
         local count; count=$(_envs_using_version "$ver")
-        local usage=""; [[ "$count" -gt 0 ]] && usage=" $(_dim "— $count environment(s)")"
-        printf "  %s%s%s\n" "$(_cyan "$ver")" "$tag" "$usage"
+        local usage="—"; [[ "$count" -gt 0 ]] && usage="$count env(s)"
+        if [[ -n "$status" ]]; then
+            printf "  $(_cyan "%-12s")  $(_green "%-8s")  %s\n" "$ver" "$status" "$usage"
+        else
+            printf "  $(_cyan "%-12s")  $(_dim "%-8s")  %s\n" "$ver" "—" "$usage"
+        fi
     done
-
-    local sys; sys=$(_read "$CAC_DIR/real_claude" "")
-    if [[ -n "$sys" ]] && [[ -x "$sys" ]]; then
-        local sv; sv=$("$sys" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "?")
-        echo
-        echo "  System: $(_cyan "$sys") ($(_dim "$sv"))"
-    fi
 }
 
 _claude_cmd_pin() {
