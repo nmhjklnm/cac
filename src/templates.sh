@@ -98,6 +98,10 @@ _write_env_settings() {
     local config_dir="$1"
     cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
 {
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
   "statusLine": {
     "type": "command",
     "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
