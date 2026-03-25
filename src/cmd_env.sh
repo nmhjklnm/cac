@@ -96,7 +96,7 @@ _env_cmd_create() {
     [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
     [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
     [[ "$bypass" == "true" ]] && echo "  $(_green "+") bypass   $(_cyan "enabled")"
-    echo "  $(_green "+") config   $(_dim "${env_dir/#$HOME/~}/.claude/")"
+    echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
     echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
     echo
@@ -141,7 +141,7 @@ _env_cmd_ls() {
         # Details line 2: config dir path
         local config_short="${env_dir}.claude/"
         config_short="${config_short/#$HOME/~}"
-        printf "    $(_dim "config") %s\n" "$(_dim "$config_short")"
+        printf "    $(_dim "env")    %s\n" "$(_dim "$config_short")"
     done
 }
 
