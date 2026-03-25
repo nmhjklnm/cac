@@ -1794,11 +1794,13 @@ cmd_check() {
             if _relay_route_ok "$proxy"; then
                 summary_parts+=("TUN 直连路由 ✓")
             else
-                # 尝试自动修复
-                if _relay_ensure_route "$proxy"; then
-                    summary_parts+=("TUN 直连路由 ✓（已自动修复）")
+                # 直接修复：添加直连路由
+                echo
+                echo "  $(_yellow "⚠") 检测到 TUN 活跃，需要添加直连路由以确保代理连通。"
+                if _relay_add_route "$proxy"; then
+                    summary_parts+=("TUN 直连路由 ✓（已修复）")
                 else
-                    problems+=("TUN 活跃但直连路由缺失 — claude 启动时将自动添加（需 sudo），或手动执行 sudo route add -host <proxy_ip> <gateway>")
+                    problems+=("直连路由添加失败 — 请手动执行 sudo route add -host <proxy_ip> <gateway>")
                 fi
             fi
         fi
