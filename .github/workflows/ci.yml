@@ -175,6 +175,8 @@ jobs:
           sudo apt-get install -y xz-utils unzip
           git clone https://github.com/nelvko/clash-for-linux-install.git /tmp/clash-install
           cd /tmp/clash-install
+          # Fix install path for CI runner user
+          sed -i "s|CLASH_BASE_DIR=.*|CLASH_BASE_DIR=$HOME/clashctl|" .env
           # Create a minimal direct-mode config (no subscription needed)
           cat > resources/profiles/config.yaml << 'YAML'
           mixed-port: 7890
@@ -185,8 +187,8 @@ jobs:
           rules:
             - MATCH,DIRECT
           YAML
-          # Install mihomo kernel
-          sudo bash install.sh mihomo "file://$(pwd)/resources/profiles/config.yaml"
+          # Install mihomo kernel (as current user, not root)
+          bash install.sh mihomo "file://$(pwd)/resources/profiles/config.yaml"
           echo "✓ clash-for-linux installed"
 
       - name: Extract cac functions
@@ -206,24 +208,36 @@ jobs:
 
       - name: Start clash + enable TUN
         run: |
-          source ~/clashctl/scripts/cmd/clashctl.sh 2>/dev/null
-          source ~/clashctl/scripts/cmd/common.sh 2>/dev/null
-          clashon || true
-          sleep 2
-          sudo /tmp/clash-install/scripts/cmd/clashctl.sh clashtun on 2>/dev/null || {
-            # fallback: enable TUN via config and restart
-            source ~/clashctl/scripts/cmd/common.sh 2>/dev/null
-            "$BIN_YQ" -i '.tun.enable = true' ~/clashctl/resources/mixin.yaml 2>/dev/null || true
-            sudo systemctl restart mihomo 2>/dev/null || sudo pkill mihomo
-            sleep 2
-            sudo mihomo -d ~/clashctl 2>/dev/null &
+          # Find mihomo binary
+          MIHOMO_BIN=$(find ~/clashctl -name mihomo -type f 2>/dev/null | head -1)
+          echo "mihomo binary: $MIHOMO_BIN"
+
+          # Enable TUN in mixin config
+          YQ_BIN=$(find ~/clashctl -name yq -type f 2>/dev/null | head -1)
+          if [ -n "$YQ_BIN" ]; then
+            "$YQ_BIN" -i '.tun.enable = true' ~/clashctl/resources/mixin.yaml
+            echo "✓ TUN enabled in config"
+          else
+            echo "⚠ yq not found, manually editing config"
+            sed -i 's/enable: false/enable: true/' ~/clashctl/resources/mixin.yaml
+          fi
+
+          # Start mihomo with sudo (TUN requires root)
+          if [ -n "$MIHOMO_BIN" ]; then
+            sudo "$MIHOMO_BIN" -d ~/clashctl </dev/null >~/clashctl/mihomo.log 2>&1 &
             sleep 3
-          }
+            echo "--- mihomo log ---"
+            tail -5 ~/clashctl/mihomo.log || true
+          else
+            echo "⚠ mihomo binary not found"
+            ls -la ~/clashctl/ || true
+          fi
+
           echo "--- interfaces ---"
-          ip link show | grep -E 'tun|Meta' || echo "(no tun interface found)"
-          echo "--- routes ---"
+          ip link show | grep -E 'tun|Meta' || echo "(no tun interface)"
+          echo "--- default routes ---"
           ip route show default
-          echo "--- process ---"
+          echo "--- mihomo process ---"
           pgrep -a mihomo || echo "mihomo not running"
 
       - name: "Test: TUN detected after clash starts"
