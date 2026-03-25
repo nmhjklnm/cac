@@ -44,6 +44,7 @@ _dk_init() {
 }
 
 _dk_load_env() {
+  # shellcheck disable=SC1090  # dynamic env file path
   [[ -f "$_dk_env_file" ]] && set -a && source "$_dk_env_file" && set +a
 }
 
@@ -90,6 +91,7 @@ _dk_compose_files() {
 
 _dk_compose() {
   local files
+  # shellcheck disable=SC2207  # intentional word splitting
   files=($(_dk_compose_files))
   docker compose "${files[@]}" "$@"
 }

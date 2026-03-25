@@ -10,6 +10,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ━━━ utils.sh ━━━
 # ── utils: 颜色、读写、UUID、proxy 解析 ───────────────────────
 
+# shellcheck disable=SC2034  # used in build-concatenated cac script
 CAC_VERSION="1.2.1"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
@@ -1399,7 +1400,8 @@ _env_cmd_ls() {
         else
             printf "    %s\n" "$name"
         fi
-        local details="claude: $(_cyan "$ver")  type: $etype"
+        local details
+        details="claude: $(_cyan "$ver")  type: $etype"
         [[ -n "$proxy" ]] && details="proxy: $proxy  $details"
         printf "      %s\n" "$details"
     done
@@ -1413,7 +1415,7 @@ _env_cmd_rm() {
     local current; current=$(_current_env)
     [[ "$name" != "$current" ]] || _die "cannot remove active environment $(_cyan "'$name'")\n  switch to another environment first"
 
-    rm -rf "$ENVS_DIR/$name"
+    rm -rf "${ENVS_DIR:?}/$name"
     echo "$(_green_bold "Removed") environment $(_cyan "$name")"
 }
 
@@ -1508,8 +1510,8 @@ _relay_start() {
     disown
 
     # 等待 relay 就绪
-    local i
-    for i in {1..30}; do
+    local _i
+    for _i in {1..30}; do
         (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null && break
         sleep 0.1
     done
@@ -1530,8 +1532,8 @@ _relay_stop() {
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null
             # 等待进程退出
-            local i
-            for i in {1..20}; do
+            local _i
+            for _i in {1..20}; do
                 kill -0 "$pid" 2>/dev/null || break
                 sleep 0.1
             done
@@ -1976,7 +1978,7 @@ _claude_cmd_uninstall() {
     local count; count=$(_envs_using_version "$ver")
     [[ "$count" -eq 0 ]] || _die "version $(_cyan "$ver") in use by $count environment(s)"
 
-    rm -rf "$VERSIONS_DIR/$ver"
+    rm -rf "${VERSIONS_DIR:?}/$ver"
     echo "$(_green_bold "Uninstalled") Claude Code $(_cyan "$ver")"
 }
 
@@ -2139,6 +2141,7 @@ _dk_init() {
 }
 
 _dk_load_env() {
+  # shellcheck disable=SC1090  # dynamic env file path
   [[ -f "$_dk_env_file" ]] && set -a && source "$_dk_env_file" && set +a
 }
 
@@ -2185,6 +2188,7 @@ _dk_compose_files() {
 
 _dk_compose() {
   local files
+  # shellcheck disable=SC2207  # intentional word splitting
   files=($(_dk_compose_files))
   docker compose "${files[@]}" "$@"
 }
