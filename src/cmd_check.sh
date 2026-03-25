@@ -9,17 +9,19 @@ cmd_check() {
     local current; current=$(_current_env)
 
     if [[ -f "$CAC_DIR/stopped" ]]; then
-        echo "$(_red "✗") cac 已停用 — 运行 'cac <name>' 恢复"
+        echo
+        echo "  $(_red "✗") cac is stopped — run $(_green "cac <name>") to resume"
+        echo
         return
     fi
     if [[ -z "$current" ]]; then
-        echo "错误：未激活任何环境，运行 'cac <name>'" >&2; exit 1
+        echo "error: no active environment — run $(_green "cac <name>")" >&2; exit 1
     fi
 
     local env_dir="$ENVS_DIR/$current"
     local proxy; proxy=$(_read "$env_dir/proxy" "")
 
-    # 解析版本号
+    # Resolve version
     local ver; ver=$(_read "$env_dir/version" "")
     if [[ -z "$ver" ]] || [[ "$ver" == "system" ]]; then
         local _real; _real=$(_read "$CAC_DIR/real_claude" "")
@@ -31,31 +33,31 @@ cmd_check() {
     fi
 
     local problems=()
-    local summary_parts=()
+    local checks=()
 
-    # ── wrapper 检查 ──
+    # ── wrapper check ──
     local claude_path; claude_path="$(command -v claude 2>/dev/null || true)"
     if [[ -z "$claude_path" ]] || [[ "$(readlink -f "$claude_path" 2>/dev/null || echo "$claude_path")" != *"/.cac/bin/claude"* ]]; then
         if [[ "$claude_path" != *"/.cac/bin/claude" ]]; then
-            problems+=("claude 未指向 wrapper — 运行 source ~/.zshrc 或重开终端")
+            problems+=("wrapper not active — run source ~/.zshrc or restart terminal")
         fi
     fi
 
-    # ── 网络检查 ──
+    # ── network check ──
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
         if ! _proxy_reachable "$proxy"; then
-            problems+=("代理不通: $proxy")
+            problems+=("proxy unreachable: $proxy")
         else
             proxy_ip=$(curl -s --proxy "$proxy" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
             if [[ -n "$proxy_ip" ]]; then
-                summary_parts+=("出口 $proxy_ip")
+                checks+=("$(_green "✓") exit IP    $(_cyan "$proxy_ip")")
             else
-                problems+=("出口 IP 获取失败")
+                problems+=("failed to get exit IP")
             fi
         fi
 
-        # 冲突检测（仅代理连通时才有意义）
+        # TUN conflict detection (only meaningful when proxy is reachable)
         if [[ -n "$proxy_ip" ]]; then
         local os; os=$(_detect_os)
         local has_conflict=false
@@ -75,7 +77,7 @@ cmd_check() {
         fi
 
         if [[ "$has_conflict" == "true" ]]; then
-            # 测试 relay
+            # Test relay
             local relay_ok=false
             if _relay_is_running 2>/dev/null; then
                 local rport; rport=$(_read "$CAC_DIR/relay.port" "")
@@ -92,19 +94,19 @@ cmd_check() {
             fi
 
             if [[ "$relay_ok" == "true" ]]; then
-                summary_parts+=("TUN 冲突已绕过")
+                checks+=("$(_green "✓") TUN        relay bypass active")
             else
                 local proxy_hp; proxy_hp=$(_proxy_host_port "$proxy")
                 local proxy_host="${proxy_hp%%:*}"
-                problems+=("代理冲突：需在代理软件中为 $proxy_host 添加 DIRECT 规则")
+                problems+=("TUN conflict: add DIRECT rule for $proxy_host in proxy software")
             fi
         fi
         fi
     else
-        summary_parts+=("API Key 模式")
+        checks+=("$(_green "✓") mode       API Key (no proxy)")
     fi
 
-    # ── 防护检查 ──
+    # ── telemetry shield ──
     local wrapper_file="$CAC_DIR/bin/claude"
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
@@ -120,42 +122,55 @@ cmd_check() {
     done
 
     if [[ "$env_ok" -eq "$env_total" ]]; then
-        summary_parts+=("遥测屏蔽 ${env_ok}/${env_total}")
+        checks+=("$(_green "✓") telemetry  ${env_ok}/${env_total} blocked")
     else
-        problems+=("遥测屏蔽 ${env_ok}/${env_total}")
+        problems+=("telemetry shield ${env_ok}/${env_total}")
     fi
 
-    # ── 输出结论 ──
+    # ── output ──
+    echo
     if [[ ${#problems[@]} -eq 0 ]]; then
-        echo "$(_green "✓") $(_bold "$current") (claude $(_cyan "$ver")) — 一切正常"
-        echo "  $(IFS=' | '; echo "${summary_parts[*]}")"
+        echo "  $(_green "✓") $(_bold "$current") $(_dim "(claude $ver)") — all good"
     else
-        echo "$(_red "✗") $(_bold "$current") (claude $(_cyan "$ver")) — 发现 ${#problems[@]} 个问题"
-        for p in "${problems[@]}"; do
-            echo "  $(_red "✗") $p"
-        done
+        echo "  $(_red "✗") $(_bold "$current") $(_dim "(claude $ver)") — ${#problems[@]} issue(s)"
     fi
+    echo
 
-    # ── 详细模式 ──
+    for c in "${checks[@]}"; do
+        echo "    $c"
+    done
+    for p in "${problems[@]}"; do
+        echo "    $(_red "✗") $p"
+    done
+    echo
+
+    # ── verbose mode ──
     if [[ "$verbose" == "true" ]]; then
+        echo "  $(_bold "Details")"
+        echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"
+        echo "    $(_dim "stable_id")  $(_read "$env_dir/stable_id")"
+        echo "    $(_dim "user_id")    $(_read "$env_dir/user_id" "—")"
+        echo "    $(_dim "TZ")         $(_read "$env_dir/tz" "—")"
+        echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
+        echo "    $(_dim "config")     ${env_dir/#$HOME/~}/.claude/"
         echo
-        echo "  UUID      : $(_read "$env_dir/uuid")"
-        echo "  stable_id : $(_read "$env_dir/stable_id")"
-        echo "  user_id   : $(_read "$env_dir/user_id" "—")"
-        echo "  TZ        : $(_read "$env_dir/tz" "—")"
-        echo "  LANG      : $(_read "$env_dir/lang" "—")"
-        echo "  遥测屏蔽  : ${env_ok}/${env_total}"
+        echo "  $(_bold "Telemetry") ${env_ok}/${env_total}"
         for var in "${env_vars[@]}"; do
-            printf "    %-36s" "$var"
-            [[ "$wrapper_content" == *"$var"* ]] && echo "$(_green "✓")" || echo "$(_red "✗")"
+            if [[ "$wrapper_content" == *"$var"* ]]; then
+                printf "    $(_green "✓") %s\n" "$var"
+            else
+                printf "    $(_red "✗") %s\n" "$var"
+            fi
         done
-        printf "  DNS 拦截  : "
+        echo
+        printf "  $(_bold "DNS block")  "
         if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
             _check_dns_block "statsig.anthropic.com"
         else
             echo "$(_red "✗")"
         fi
-        printf "  mTLS      : "
+        printf "  $(_bold "mTLS")       "
         _check_mtls "$env_dir"
+        echo
     fi
 }

@@ -2,19 +2,20 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local"
+    local name="" proxy="" claude_ver="" env_type="local" bypass=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
+            --bypass)    bypass=true; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--type local|container]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--bypass]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -31,7 +32,7 @@ _env_cmd_create() {
     local proxy_url=""
     if [[ -n "$proxy" ]]; then
         if [[ ! "$proxy" =~ ^(http|https|socks5):// ]]; then
-            printf "Detecting proxy protocol ... "
+            printf "  $(_dim "Detecting proxy protocol ...") "
             if proxy_url=$(_auto_detect_proxy "$proxy"); then
                 echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
             else
@@ -45,7 +46,7 @@ _env_cmd_create() {
     # Geo-detect timezone (single request via proxy)
     local tz="America/New_York" lang="en_US.UTF-8"
     if [[ -n "$proxy_url" ]]; then
-        printf "Detecting timezone ... "
+        printf "  $(_dim "Detecting timezone ...") "
         local ip_info
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
@@ -71,45 +72,75 @@ _env_cmd_create() {
     [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
     echo "$env_type"          > "$env_dir/type"
     mkdir -p "$env_dir/.claude"
-    echo '{}' > "$env_dir/.claude/settings.json"
+
+    # Initialize settings.json, statusline, and CLAUDE.md
+    _write_env_settings "$env_dir/.claude" "$bypass"
+    _write_statusline_script "$env_dir/.claude"
+    _write_env_claude_md "$env_dir/.claude" "$name"
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     local elapsed; elapsed=$(_timer_elapsed)
-    echo "$(_green_bold "Created") environment $(_cyan "$name") $(_dim "in $elapsed")"
-    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy: $proxy_url"
-    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude: $(_cyan "$claude_ver")"
-    echo "  $(_green "+") type: $env_type"
     echo
-    echo "Activate with: $(_green "cac $name")"
+    echo "  $(_green_bold "Created") $(_bold "$name") $(_dim "in $elapsed")"
+    echo
+    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
+    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    [[ "$bypass" == "true" ]] && echo "  $(_green "+") bypass   $(_cyan "enabled")"
+    echo "  $(_green "+") config   $(_dim "${env_dir/#$HOME/~}/.claude/")"
+    echo
+    echo "  Activate: $(_green "cac $name")"
+    echo
 }
 
 _env_cmd_ls() {
     if [[ ! -d "$ENVS_DIR" ]] || [[ -z "$(ls -A "$ENVS_DIR" 2>/dev/null)" ]]; then
-        echo "$(_dim "(no environments — create with 'cac env create <name>')")"
+        echo "$(_dim "  No environments yet.")"
+        echo "  Run $(_green "cac env create <name>") to get started."
         return
     fi
 
     local current; current=$(_current_env)
-    local stopped_tag=""
-    [[ -f "$CAC_DIR/stopped" ]] && stopped_tag=" $(_red "[stopped]")"
+    local stopped=false
+    [[ -f "$CAC_DIR/stopped" ]] && stopped=true
 
+    local count=0
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
+        (( count++ ))
         local name; name=$(basename "$env_dir")
         local proxy; proxy=$(_read "$env_dir/proxy" "")
         local ver; ver=$(_read "$env_dir/version" "system")
         local etype; etype=$(_read "$env_dir/type" "local")
 
         if [[ "$name" == "$current" ]]; then
-            printf "  %s %s%s\n" "$(_green "▶")" "$(_bold "$name")" "$stopped_tag"
+            if [[ "$stopped" == "true" ]]; then
+                printf "  $(_yellow "■") $(_bold "$name") $(_red "(stopped)")\n"
+            else
+                printf "  $(_green "▶") $(_bold "$name") $(_green "(active)")\n"
+            fi
         else
-            printf "    %s\n" "$name"
+            printf "  $(_dim "○") %s\n" "$name"
         fi
-        local details
-        details="claude: $(_cyan "$ver")  type: $etype"
-        [[ -n "$proxy" ]] && details="proxy: $proxy  $details"
-        printf "      %s\n" "$details"
+
+        # Details line 1: version + type + proxy status
+        local info
+        info="$(_dim "claude") $(_cyan "$ver")"
+        [[ "$etype" != "local" ]] && info="$info  $(_dim "type") $etype"
+        if [[ -n "$proxy" ]]; then
+            # Mask credentials in proxy display
+            local proxy_display="$proxy"
+            if [[ "$proxy" == *"://"*"@"* ]]; then
+                proxy_display=$(echo "$proxy" | sed 's|://[^@]*@|://***@|')
+            fi
+            info="$info  $(_dim "proxy") $proxy_display"
+        fi
+        printf "    %s\n" "$info"
+
+        # Details line 2: config dir path
+        local config_short="${env_dir}.claude/"
+        config_short="${config_short/#$HOME/~}"
+        printf "    $(_dim "config") %s\n" "$(_dim "$config_short")"
     done
 }
 
@@ -176,14 +207,16 @@ cmd_env() {
         deactivate)   _env_cmd_deactivate ;;
         check)        cmd_check ;;
         help|-h|--help)
-            echo "$(_bold "cac env") — environment management"
             echo
-            echo "  $(_bold "create") <name> [-p <proxy>] [-c <ver>] [--type local|container]"
-            echo "  $(_bold "ls")              List all environments"
-            echo "  $(_bold "rm") <name>       Remove an environment"
-            echo "  $(_bold "activate") <name> Activate (shortcut: cac <name>)"
-            echo "  $(_bold "deactivate")      Deactivate — claude runs unprotected"
-            echo "  $(_bold "check")           Verify current environment"
+            echo "  $(_bold "cac env") — environment management"
+            echo
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--bypass]"
+            echo "    $(_green "ls")              List all environments"
+            echo "    $(_green "rm") <name>       Remove an environment"
+            echo "    $(_green "activate") <name> Activate (shortcut: cac <name>)"
+            echo "    $(_green "deactivate")      Deactivate"
+            echo "    $(_green "check")           Verify current environment"
+            echo
             ;;
         *) _die "unknown: cac env $1" ;;
     esac
