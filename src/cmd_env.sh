@@ -187,9 +187,90 @@ _env_cmd_activate() {
     echo "$(_green_bold "Activated") $(_bold "$name") $(_dim "in $elapsed")"
 }
 
+_env_cmd_set() {
+    _require_setup
+
+    # Parse: cac env set [name] <key> <value|--remove>
+    # If first arg is a known key, use current env; otherwise treat as env name
+    local name="" key="" value="" remove=false
+    local known_keys="proxy version bypass"
+
+    if [[ $# -lt 1 ]]; then
+        _die "usage: cac env set [name] <proxy|version|bypass> <value|--remove>"
+    fi
+
+    # Is first arg a known key or an env name?
+    if echo "$known_keys" | grep -qw "${1:-}"; then
+        name=$(_current_env)
+        [[ -n "$name" ]] || _die "no active environment — specify env name"
+    else
+        name="$1"; shift
+    fi
+
+    _require_env "$name"
+    local env_dir="$ENVS_DIR/$name"
+
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|bypass> <value|--remove>"
+    key="$1"; shift
+
+    # Parse value or --remove
+    if [[ "${1:-}" == "--remove" ]]; then
+        remove=true; shift
+    elif [[ $# -ge 1 ]]; then
+        value="$1"; shift
+    fi
+
+    case "$key" in
+        proxy)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/proxy"
+                echo "$(_green_bold "Removed") proxy from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] proxy <url|host:port:user:pass>"
+                local proxy_url
+                if [[ ! "$value" =~ ^(http|https|socks5):// ]]; then
+                    printf "  $(_dim "Detecting proxy protocol ...") "
+                    if proxy_url=$(_auto_detect_proxy "$value"); then
+                        echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
+                    else
+                        echo "$(_yellow "failed, defaulting to http")"
+                    fi
+                else
+                    proxy_url=$(_parse_proxy "$value")
+                fi
+                echo "$proxy_url" > "$env_dir/proxy"
+                echo "$(_green_bold "Set") proxy for $(_bold "$name") → $proxy_url"
+            fi
+            ;;
+        version)
+            [[ "$remove" != "true" ]] || _die "cannot remove version — use 'cac env set $name version latest'"
+            [[ -n "$value" ]] || _die "usage: cac env set [name] version <ver|latest>"
+            local ver
+            ver=$(_ensure_version_installed "$value") || exit 1
+            echo "$ver" > "$env_dir/version"
+            echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
+            ;;
+        bypass)
+            if [[ "$value" == "on" || "$value" == "true" ]]; then
+                _write_env_settings "$env_dir/.claude" "true"
+                echo "$(_green_bold "Set") bypass for $(_bold "$name") → $(_cyan "enabled")"
+            elif [[ "$value" == "off" || "$value" == "false" || "$remove" == "true" ]]; then
+                _write_env_settings "$env_dir/.claude" "false"
+                echo "$(_green_bold "Set") bypass for $(_bold "$name") → $(_dim "disabled")"
+            else
+                _die "usage: cac env set [name] bypass on|off"
+            fi
+            ;;
+        *)
+            _die "unknown key '$key' — use proxy, version, or bypass"
+            ;;
+    esac
+}
+
 cmd_env() {
     case "${1:-help}" in
         create)       _env_cmd_create "${@:2}" ;;
+        set)          _env_cmd_set "${@:2}" ;;
         ls|list)      _env_cmd_ls ;;
         rm|remove)    _env_cmd_rm "${@:2}" ;;
         activate)     _env_cmd_activate "${@:2}" ;;
@@ -200,6 +281,10 @@ cmd_env() {
             echo "  $(_bold "cac env") — environment management"
             echo
             echo "    $(_green "create") <name> [-p proxy] [-c ver] [--bypass]"
+            echo "    $(_green "set") [name] proxy <url>           Set proxy"
+            echo "    $(_green "set") [name] proxy --remove        Remove proxy"
+            echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+            echo "    $(_green "set") [name] bypass on|off         Toggle bypass mode"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
