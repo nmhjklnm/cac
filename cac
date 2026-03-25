@@ -878,7 +878,151 @@ _check_mtls() {
 }
 
 # ━━━ templates.sh ━━━
-# ── templates: 写入 wrapper 和 ioreg shim ──────────────────────
+# ── templates: 写入 wrapper、shim、环境初始化 ──────────────────
+
+# 写入 statusline-command.sh 到环境 .claude 目录
+_write_statusline_script() {
+    local config_dir="$1"
+    cat > "$config_dir/statusline-command.sh" << 'STATUSLINE_EOF'
+#!/usr/bin/env bash
+input=$(cat)
+
+model=$(echo "$input" | jq -r '.model.display_name // empty')
+cwd=$(echo "$input" | jq -r '.cwd // empty')
+version=$(echo "$input" | jq -r '.version // empty')
+session_name=$(echo "$input" | jq -r '.session_name // empty')
+
+used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
+ctx_size=$(echo "$input" | jq -r '.context_window.context_window_size // empty')
+input_tokens=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // empty')
+
+five_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+week_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+five_reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+
+worktree_name=$(echo "$input" | jq -r '.worktree.name // empty')
+worktree_branch=$(echo "$input" | jq -r '.worktree.branch // empty')
+
+reset='\033[0m'; bold='\033[1m'; dim='\033[2m'
+cyan='\033[36m'; yellow='\033[33m'; green='\033[32m'; red='\033[31m'
+magenta='\033[35m'; blue='\033[34m'
+
+parts=()
+
+[ -n "$model" ] && parts+=("$(printf "${cyan}${bold}%s${reset}" "$model")")
+[ -n "$version" ] && parts+=("$(printf "${dim}v%s${reset}" "$version")")
+[ -n "$session_name" ] && parts+=("$(printf "${magenta}[%s]${reset}" "$session_name")")
+
+if [ -n "$cwd" ]; then
+  short_cwd="${cwd/#$HOME/~}"
+  parts+=("$(printf "${blue}%s${reset}" "$short_cwd")")
+fi
+
+if [ -n "$used_pct" ] && [ -n "$ctx_size" ]; then
+  ctx_int=$(printf "%.0f" "$used_pct")
+  if [ "$ctx_int" -ge 80 ]; then ctx_color="$red"
+  elif [ "$ctx_int" -ge 50 ]; then ctx_color="$yellow"
+  else ctx_color="$green"; fi
+  ctx_k=$(echo "$ctx_size" | awk '{printf "%.0fk", $1/1000}')
+  if [ -n "$input_tokens" ]; then
+    tokens_k=$(echo "$input_tokens" | awk '{printf "%.1fk", $1/1000}')
+    parts+=("$(printf "${ctx_color}ctx:%.0f%% %s/%s${reset}" "$used_pct" "${tokens_k}" "${ctx_k}")")
+  else
+    parts+=("$(printf "${ctx_color}ctx:%.0f%% (%s)${reset}" "$used_pct" "${ctx_k}")")
+  fi
+fi
+
+rate_parts=()
+if [ -n "$five_pct" ]; then
+  five_int=$(printf "%.0f" "$five_pct")
+  if [ "$five_int" -ge 80 ]; then rc="$red"
+  elif [ "$five_int" -ge 50 ]; then rc="$yellow"
+  else rc="$green"; fi
+  rs="$(printf "${rc}5h:%.0f%%${reset}" "$five_pct")"
+  if [ -n "$five_reset" ] && [ "$five_int" -ge 50 ]; then
+    rm=$(( (five_reset - $(date +%s)) / 60 ))
+    [ "$rm" -gt 0 ] && rs="$rs$(printf "${dim}(${rm}m)${reset}")"
+  fi
+  rate_parts+=("$rs")
+fi
+if [ -n "$week_pct" ]; then
+  week_int=$(printf "%.0f" "$week_pct")
+  if [ "$week_int" -ge 80 ]; then wc="$red"
+  elif [ "$week_int" -ge 50 ]; then wc="$yellow"
+  else wc="$green"; fi
+  rate_parts+=("$(printf "${wc}7d:%.0f%%${reset}" "$week_pct")")
+fi
+if [ "${#rate_parts[@]}" -gt 0 ]; then
+  rstr="${rate_parts[0]}"
+  for i in "${rate_parts[@]:1}"; do rstr="$rstr $i"; done
+  parts+=("$rstr")
+fi
+
+if [ -n "$worktree_name" ]; then
+  wt="wt:$worktree_name"
+  [ -n "$worktree_branch" ] && wt="$wt($worktree_branch)"
+  parts+=("$(printf "${cyan}%s${reset}" "$wt")")
+fi
+
+if [ "${#parts[@]}" -eq 0 ]; then printf "${dim}claude${reset}\n"; exit 0; fi
+sep="$(printf " ${dim}|${reset} ")"
+result="${parts[0]}"
+for p in "${parts[@]:1}"; do result="$result$sep$p"; done
+printf "%b\n" "$result"
+STATUSLINE_EOF
+    chmod +x "$config_dir/statusline-command.sh"
+}
+
+# 写入 settings.json 到环境 .claude 目录
+# $1 = config_dir, $2 = bypass (true/false)
+_write_env_settings() {
+    local config_dir="$1"
+    local bypass="${2:-false}"
+
+    if [[ "$bypass" == "true" ]]; then
+        cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "statusLine": {
+    "type": "command",
+    "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
+  }
+}
+SETTINGS_EOF
+    else
+        cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
+  }
+}
+SETTINGS_EOF
+    fi
+}
+
+# 写入 CLAUDE.md 到环境 .claude 目录
+_write_env_claude_md() {
+    local config_dir="$1"
+    local env_name="$2"
+    cat > "$config_dir/CLAUDE.md" << CLAUDEMD_EOF
+# cac managed environment
+
+This Claude Code instance is managed by **cac** (Claude Code Cloak).
+
+- Environment name: \`$env_name\`
+- Config directory: \`CLAUDE_CONFIG_DIR\` is set to this \`.claude/\` folder
+- Your settings, credentials, and sessions are isolated per-environment
+
+Useful commands:
+- \`cac env ls\` — list all environments and their config paths
+- \`cac env check\` — verify current environment health
+- \`cac <name>\` — switch to another environment
+CLAUDEMD_EOF
+}
 
 _write_wrapper() {
     mkdir -p "$CAC_DIR/bin"
@@ -1296,19 +1440,20 @@ cmd_setup() {
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local"
+    local name="" proxy="" claude_ver="" env_type="local" bypass=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
+            --bypass)    bypass=true; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--type local|container]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--bypass]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -1325,7 +1470,7 @@ _env_cmd_create() {
     local proxy_url=""
     if [[ -n "$proxy" ]]; then
         if [[ ! "$proxy" =~ ^(http|https|socks5):// ]]; then
-            printf "Detecting proxy protocol ... "
+            printf "  $(_dim "Detecting proxy protocol ...") "
             if proxy_url=$(_auto_detect_proxy "$proxy"); then
                 echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
             else
@@ -1339,7 +1484,7 @@ _env_cmd_create() {
     # Geo-detect timezone (single request via proxy)
     local tz="America/New_York" lang="en_US.UTF-8"
     if [[ -n "$proxy_url" ]]; then
-        printf "Detecting timezone ... "
+        printf "  $(_dim "Detecting timezone ...") "
         local ip_info
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
@@ -1365,45 +1510,75 @@ _env_cmd_create() {
     [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
     echo "$env_type"          > "$env_dir/type"
     mkdir -p "$env_dir/.claude"
-    echo '{}' > "$env_dir/.claude/settings.json"
+
+    # Initialize settings.json, statusline, and CLAUDE.md
+    _write_env_settings "$env_dir/.claude" "$bypass"
+    _write_statusline_script "$env_dir/.claude"
+    _write_env_claude_md "$env_dir/.claude" "$name"
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     local elapsed; elapsed=$(_timer_elapsed)
-    echo "$(_green_bold "Created") environment $(_cyan "$name") $(_dim "in $elapsed")"
-    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy: $proxy_url"
-    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude: $(_cyan "$claude_ver")"
-    echo "  $(_green "+") type: $env_type"
     echo
-    echo "Activate with: $(_green "cac $name")"
+    echo "  $(_green_bold "Created") $(_bold "$name") $(_dim "in $elapsed")"
+    echo
+    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
+    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    [[ "$bypass" == "true" ]] && echo "  $(_green "+") bypass   $(_cyan "enabled")"
+    echo "  $(_green "+") config   $(_dim "${env_dir/#$HOME/~}/.claude/")"
+    echo
+    echo "  Activate: $(_green "cac $name")"
+    echo
 }
 
 _env_cmd_ls() {
     if [[ ! -d "$ENVS_DIR" ]] || [[ -z "$(ls -A "$ENVS_DIR" 2>/dev/null)" ]]; then
-        echo "$(_dim "(no environments — create with 'cac env create <name>')")"
+        echo "$(_dim "  No environments yet.")"
+        echo "  Run $(_green "cac env create <name>") to get started."
         return
     fi
 
     local current; current=$(_current_env)
-    local stopped_tag=""
-    [[ -f "$CAC_DIR/stopped" ]] && stopped_tag=" $(_red "[stopped]")"
+    local stopped=false
+    [[ -f "$CAC_DIR/stopped" ]] && stopped=true
 
+    local count=0
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
+        (( count++ ))
         local name; name=$(basename "$env_dir")
         local proxy; proxy=$(_read "$env_dir/proxy" "")
         local ver; ver=$(_read "$env_dir/version" "system")
         local etype; etype=$(_read "$env_dir/type" "local")
 
         if [[ "$name" == "$current" ]]; then
-            printf "  %s %s%s\n" "$(_green "▶")" "$(_bold "$name")" "$stopped_tag"
+            if [[ "$stopped" == "true" ]]; then
+                printf "  $(_yellow "■") $(_bold "$name") $(_red "(stopped)")\n"
+            else
+                printf "  $(_green "▶") $(_bold "$name") $(_green "(active)")\n"
+            fi
         else
-            printf "    %s\n" "$name"
+            printf "  $(_dim "○") %s\n" "$name"
         fi
-        local details
-        details="claude: $(_cyan "$ver")  type: $etype"
-        [[ -n "$proxy" ]] && details="proxy: $proxy  $details"
-        printf "      %s\n" "$details"
+
+        # Details line 1: version + type + proxy status
+        local info
+        info="$(_dim "claude") $(_cyan "$ver")"
+        [[ "$etype" != "local" ]] && info="$info  $(_dim "type") $etype"
+        if [[ -n "$proxy" ]]; then
+            # Mask credentials in proxy display
+            local proxy_display="$proxy"
+            if [[ "$proxy" == *"://"*"@"* ]]; then
+                proxy_display=$(echo "$proxy" | sed 's|://[^@]*@|://***@|')
+            fi
+            info="$info  $(_dim "proxy") $proxy_display"
+        fi
+        printf "    %s\n" "$info"
+
+        # Details line 2: config dir path
+        local config_short="${env_dir}.claude/"
+        config_short="${config_short/#$HOME/~}"
+        printf "    $(_dim "config") %s\n" "$(_dim "$config_short")"
     done
 }
 
@@ -1470,14 +1645,16 @@ cmd_env() {
         deactivate)   _env_cmd_deactivate ;;
         check)        cmd_check ;;
         help|-h|--help)
-            echo "$(_bold "cac env") — environment management"
             echo
-            echo "  $(_bold "create") <name> [-p <proxy>] [-c <ver>] [--type local|container]"
-            echo "  $(_bold "ls")              List all environments"
-            echo "  $(_bold "rm") <name>       Remove an environment"
-            echo "  $(_bold "activate") <name> Activate (shortcut: cac <name>)"
-            echo "  $(_bold "deactivate")      Deactivate — claude runs unprotected"
-            echo "  $(_bold "check")           Verify current environment"
+            echo "  $(_bold "cac env") — environment management"
+            echo
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--bypass]"
+            echo "    $(_green "ls")              List all environments"
+            echo "    $(_green "rm") <name>       Remove an environment"
+            echo "    $(_green "activate") <name> Activate (shortcut: cac <name>)"
+            echo "    $(_green "deactivate")      Deactivate"
+            echo "    $(_green "check")           Verify current environment"
+            echo
             ;;
         *) _die "unknown: cac env $1" ;;
     esac
@@ -1708,17 +1885,19 @@ cmd_check() {
     local current; current=$(_current_env)
 
     if [[ -f "$CAC_DIR/stopped" ]]; then
-        echo "$(_red "✗") cac 已停用 — 运行 'cac <name>' 恢复"
+        echo
+        echo "  $(_red "✗") cac is stopped — run $(_green "cac <name>") to resume"
+        echo
         return
     fi
     if [[ -z "$current" ]]; then
-        echo "错误：未激活任何环境，运行 'cac <name>'" >&2; exit 1
+        echo "error: no active environment — run $(_green "cac <name>")" >&2; exit 1
     fi
 
     local env_dir="$ENVS_DIR/$current"
     local proxy; proxy=$(_read "$env_dir/proxy" "")
 
-    # 解析版本号
+    # Resolve version
     local ver; ver=$(_read "$env_dir/version" "")
     if [[ -z "$ver" ]] || [[ "$ver" == "system" ]]; then
         local _real; _real=$(_read "$CAC_DIR/real_claude" "")
@@ -1730,31 +1909,31 @@ cmd_check() {
     fi
 
     local problems=()
-    local summary_parts=()
+    local checks=()
 
-    # ── wrapper 检查 ──
+    # ── wrapper check ──
     local claude_path; claude_path="$(command -v claude 2>/dev/null || true)"
     if [[ -z "$claude_path" ]] || [[ "$(readlink -f "$claude_path" 2>/dev/null || echo "$claude_path")" != *"/.cac/bin/claude"* ]]; then
         if [[ "$claude_path" != *"/.cac/bin/claude" ]]; then
-            problems+=("claude 未指向 wrapper — 运行 source ~/.zshrc 或重开终端")
+            problems+=("wrapper not active — run source ~/.zshrc or restart terminal")
         fi
     fi
 
-    # ── 网络检查 ──
+    # ── network check ──
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
         if ! _proxy_reachable "$proxy"; then
-            problems+=("代理不通: $proxy")
+            problems+=("proxy unreachable: $proxy")
         else
             proxy_ip=$(curl -s --proxy "$proxy" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
             if [[ -n "$proxy_ip" ]]; then
-                summary_parts+=("出口 $proxy_ip")
+                checks+=("$(_green "✓") exit IP    $(_cyan "$proxy_ip")")
             else
-                problems+=("出口 IP 获取失败")
+                problems+=("failed to get exit IP")
             fi
         fi
 
-        # 冲突检测（仅代理连通时才有意义）
+        # TUN conflict detection (only meaningful when proxy is reachable)
         if [[ -n "$proxy_ip" ]]; then
         local os; os=$(_detect_os)
         local has_conflict=false
@@ -1774,7 +1953,7 @@ cmd_check() {
         fi
 
         if [[ "$has_conflict" == "true" ]]; then
-            # 测试 relay
+            # Test relay
             local relay_ok=false
             if _relay_is_running 2>/dev/null; then
                 local rport; rport=$(_read "$CAC_DIR/relay.port" "")
@@ -1791,19 +1970,19 @@ cmd_check() {
             fi
 
             if [[ "$relay_ok" == "true" ]]; then
-                summary_parts+=("TUN 冲突已绕过")
+                checks+=("$(_green "✓") TUN        relay bypass active")
             else
                 local proxy_hp; proxy_hp=$(_proxy_host_port "$proxy")
                 local proxy_host="${proxy_hp%%:*}"
-                problems+=("代理冲突：需在代理软件中为 $proxy_host 添加 DIRECT 规则")
+                problems+=("TUN conflict: add DIRECT rule for $proxy_host in proxy software")
             fi
         fi
         fi
     else
-        summary_parts+=("API Key 模式")
+        checks+=("$(_green "✓") mode       API Key (no proxy)")
     fi
 
-    # ── 防护检查 ──
+    # ── telemetry shield ──
     local wrapper_file="$CAC_DIR/bin/claude"
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
@@ -1819,43 +1998,56 @@ cmd_check() {
     done
 
     if [[ "$env_ok" -eq "$env_total" ]]; then
-        summary_parts+=("遥测屏蔽 ${env_ok}/${env_total}")
+        checks+=("$(_green "✓") telemetry  ${env_ok}/${env_total} blocked")
     else
-        problems+=("遥测屏蔽 ${env_ok}/${env_total}")
+        problems+=("telemetry shield ${env_ok}/${env_total}")
     fi
 
-    # ── 输出结论 ──
+    # ── output ──
+    echo
     if [[ ${#problems[@]} -eq 0 ]]; then
-        echo "$(_green "✓") $(_bold "$current") (claude $(_cyan "$ver")) — 一切正常"
-        echo "  $(IFS=' | '; echo "${summary_parts[*]}")"
+        echo "  $(_green "✓") $(_bold "$current") $(_dim "(claude $ver)") — all good"
     else
-        echo "$(_red "✗") $(_bold "$current") (claude $(_cyan "$ver")) — 发现 ${#problems[@]} 个问题"
-        for p in "${problems[@]}"; do
-            echo "  $(_red "✗") $p"
-        done
+        echo "  $(_red "✗") $(_bold "$current") $(_dim "(claude $ver)") — ${#problems[@]} issue(s)"
     fi
+    echo
 
-    # ── 详细模式 ──
+    for c in "${checks[@]}"; do
+        echo "    $c"
+    done
+    for p in "${problems[@]}"; do
+        echo "    $(_red "✗") $p"
+    done
+    echo
+
+    # ── verbose mode ──
     if [[ "$verbose" == "true" ]]; then
+        echo "  $(_bold "Details")"
+        echo "    $(_dim "UUID")       $(_read "$env_dir/uuid")"
+        echo "    $(_dim "stable_id")  $(_read "$env_dir/stable_id")"
+        echo "    $(_dim "user_id")    $(_read "$env_dir/user_id" "—")"
+        echo "    $(_dim "TZ")         $(_read "$env_dir/tz" "—")"
+        echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
+        echo "    $(_dim "config")     ${env_dir/#$HOME/~}/.claude/"
         echo
-        echo "  UUID      : $(_read "$env_dir/uuid")"
-        echo "  stable_id : $(_read "$env_dir/stable_id")"
-        echo "  user_id   : $(_read "$env_dir/user_id" "—")"
-        echo "  TZ        : $(_read "$env_dir/tz" "—")"
-        echo "  LANG      : $(_read "$env_dir/lang" "—")"
-        echo "  遥测屏蔽  : ${env_ok}/${env_total}"
+        echo "  $(_bold "Telemetry") ${env_ok}/${env_total}"
         for var in "${env_vars[@]}"; do
-            printf "    %-36s" "$var"
-            [[ "$wrapper_content" == *"$var"* ]] && echo "$(_green "✓")" || echo "$(_red "✗")"
+            if [[ "$wrapper_content" == *"$var"* ]]; then
+                printf "    $(_green "✓") %s\n" "$var"
+            else
+                printf "    $(_red "✗") %s\n" "$var"
+            fi
         done
-        printf "  DNS 拦截  : "
+        echo
+        printf "  $(_bold "DNS block")  "
         if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
             _check_dns_block "statsig.anthropic.com"
         else
             echo "$(_red "✗")"
         fi
-        printf "  mTLS      : "
+        printf "  $(_bold "mTLS")       "
         _check_mtls "$env_dir"
+        echo
     fi
 }
 
@@ -2673,60 +2865,47 @@ cmd_delete() {
 # ── cmd: version ───────────────────────────────────────────────
 
 cmd_version() {
-    local method
-    method=$(_install_method)
-
-    local method_label
-    case "$method" in
-        npm)  method_label="npm (Node)" ;;
-        bash) method_label="bash (Shell Script)" ;;
-        *)    method_label="unknown" ;;
-    esac
-
-    echo "cac $CAC_VERSION"
-    echo "安装方式: $method_label"
+    echo "  $(_bold "cac") $(_cyan "$CAC_VERSION")"
 }
 
 # ━━━ cmd_help.sh ━━━
 # ── cmd: help ──────────────────────────────────────────────────
 
 cmd_help() {
-cat <<EOF
-$(_bold "cac") — Isolate, protect, and manage your Claude Code
+    echo
+    echo "  $(_bold "cac") $(_dim "$CAC_VERSION") — Isolate, protect, and manage your Claude Code"
+    echo
 
-$(_bold "cac claude") — version management
-  install [latest|<ver>]   Install a Claude Code version
-  uninstall <ver>           Remove an installed version
-  ls                        List installed versions
-  pin <ver>                 Pin current environment to a version
+    echo "  $(_bold "Environment")"
+    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--bypass]"
+    echo "    $(_green "cac env ls")                  List all environments"
+    echo "    $(_green "cac env rm") <name>           Remove an environment"
+    echo "    $(_green "cac env check")               Verify current environment"
+    echo "    $(_green "cac") <name>                  Activate environment (shortcut)"
+    echo "    $(_green "cac env deactivate")          Deactivate"
+    echo
 
-$(_bold "cac env") — environment management
-  create <name> [-p <proxy>] [-c <ver>] [--type local|container]
-  ls                        List all environments
-  rm <name>                 Remove an environment
-  activate <name>           Activate (shortcut: cac <name>)
-  deactivate                Deactivate — claude runs unprotected
-  check                     Verify current environment
+    echo "  $(_bold "Version")"
+    echo "    $(_green "cac claude install") [latest|ver]   Install Claude Code"
+    echo "    $(_green "cac claude ls")                     List installed versions"
+    echo "    $(_green "cac claude pin") <ver>              Pin env to a version"
+    echo "    $(_green "cac claude uninstall") <ver>        Remove a version"
+    echo
 
-$(_bold "cac self") — self-management
-  update                    Update cac to the latest version
-  delete                    Uninstall cac completely
+    echo "  $(_bold "Self")"
+    echo "    $(_green "cac self update")             Update cac"
+    echo "    $(_green "cac self delete")             Uninstall cac completely"
+    echo
 
-$(_bold "cac docker") — containerized mode
-  setup|start|enter|check|port|stop|help
+    echo "  $(_bold "Docker")"
+    echo "    $(_green "cac docker") setup|start|enter|check|port|stop"
+    echo
 
-$(_bold "Shortcuts:")
-  cac <name>                = cac env activate <name>
-  cac ls                    = cac env ls
-
-$(_bold "Examples:")
-  cac claude install latest
-  cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81
-  cac env create personal
-  cac work
-  cac env deactivate
-  cac env check
-EOF
+    echo "  $(_dim "Examples:")"
+    echo "    $(_dim "cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81")"
+    echo "    $(_dim "cac env create personal --bypass")"
+    echo "    $(_dim "cac work")"
+    echo
 }
 
 # ━━━ main.sh ━━━

@@ -1,4 +1,148 @@
-# ── templates: 写入 wrapper 和 ioreg shim ──────────────────────
+# ── templates: 写入 wrapper、shim、环境初始化 ──────────────────
+
+# 写入 statusline-command.sh 到环境 .claude 目录
+_write_statusline_script() {
+    local config_dir="$1"
+    cat > "$config_dir/statusline-command.sh" << 'STATUSLINE_EOF'
+#!/usr/bin/env bash
+input=$(cat)
+
+model=$(echo "$input" | jq -r '.model.display_name // empty')
+cwd=$(echo "$input" | jq -r '.cwd // empty')
+version=$(echo "$input" | jq -r '.version // empty')
+session_name=$(echo "$input" | jq -r '.session_name // empty')
+
+used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
+ctx_size=$(echo "$input" | jq -r '.context_window.context_window_size // empty')
+input_tokens=$(echo "$input" | jq -r '.context_window.current_usage.input_tokens // empty')
+
+five_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+week_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+five_reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+
+worktree_name=$(echo "$input" | jq -r '.worktree.name // empty')
+worktree_branch=$(echo "$input" | jq -r '.worktree.branch // empty')
+
+reset='\033[0m'; bold='\033[1m'; dim='\033[2m'
+cyan='\033[36m'; yellow='\033[33m'; green='\033[32m'; red='\033[31m'
+magenta='\033[35m'; blue='\033[34m'
+
+parts=()
+
+[ -n "$model" ] && parts+=("$(printf "${cyan}${bold}%s${reset}" "$model")")
+[ -n "$version" ] && parts+=("$(printf "${dim}v%s${reset}" "$version")")
+[ -n "$session_name" ] && parts+=("$(printf "${magenta}[%s]${reset}" "$session_name")")
+
+if [ -n "$cwd" ]; then
+  short_cwd="${cwd/#$HOME/~}"
+  parts+=("$(printf "${blue}%s${reset}" "$short_cwd")")
+fi
+
+if [ -n "$used_pct" ] && [ -n "$ctx_size" ]; then
+  ctx_int=$(printf "%.0f" "$used_pct")
+  if [ "$ctx_int" -ge 80 ]; then ctx_color="$red"
+  elif [ "$ctx_int" -ge 50 ]; then ctx_color="$yellow"
+  else ctx_color="$green"; fi
+  ctx_k=$(echo "$ctx_size" | awk '{printf "%.0fk", $1/1000}')
+  if [ -n "$input_tokens" ]; then
+    tokens_k=$(echo "$input_tokens" | awk '{printf "%.1fk", $1/1000}')
+    parts+=("$(printf "${ctx_color}ctx:%.0f%% %s/%s${reset}" "$used_pct" "${tokens_k}" "${ctx_k}")")
+  else
+    parts+=("$(printf "${ctx_color}ctx:%.0f%% (%s)${reset}" "$used_pct" "${ctx_k}")")
+  fi
+fi
+
+rate_parts=()
+if [ -n "$five_pct" ]; then
+  five_int=$(printf "%.0f" "$five_pct")
+  if [ "$five_int" -ge 80 ]; then rc="$red"
+  elif [ "$five_int" -ge 50 ]; then rc="$yellow"
+  else rc="$green"; fi
+  rs="$(printf "${rc}5h:%.0f%%${reset}" "$five_pct")"
+  if [ -n "$five_reset" ] && [ "$five_int" -ge 50 ]; then
+    rm=$(( (five_reset - $(date +%s)) / 60 ))
+    [ "$rm" -gt 0 ] && rs="$rs$(printf "${dim}(${rm}m)${reset}")"
+  fi
+  rate_parts+=("$rs")
+fi
+if [ -n "$week_pct" ]; then
+  week_int=$(printf "%.0f" "$week_pct")
+  if [ "$week_int" -ge 80 ]; then wc="$red"
+  elif [ "$week_int" -ge 50 ]; then wc="$yellow"
+  else wc="$green"; fi
+  rate_parts+=("$(printf "${wc}7d:%.0f%%${reset}" "$week_pct")")
+fi
+if [ "${#rate_parts[@]}" -gt 0 ]; then
+  rstr="${rate_parts[0]}"
+  for i in "${rate_parts[@]:1}"; do rstr="$rstr $i"; done
+  parts+=("$rstr")
+fi
+
+if [ -n "$worktree_name" ]; then
+  wt="wt:$worktree_name"
+  [ -n "$worktree_branch" ] && wt="$wt($worktree_branch)"
+  parts+=("$(printf "${cyan}%s${reset}" "$wt")")
+fi
+
+if [ "${#parts[@]}" -eq 0 ]; then printf "${dim}claude${reset}\n"; exit 0; fi
+sep="$(printf " ${dim}|${reset} ")"
+result="${parts[0]}"
+for p in "${parts[@]:1}"; do result="$result$sep$p"; done
+printf "%b\n" "$result"
+STATUSLINE_EOF
+    chmod +x "$config_dir/statusline-command.sh"
+}
+
+# 写入 settings.json 到环境 .claude 目录
+# $1 = config_dir, $2 = bypass (true/false)
+_write_env_settings() {
+    local config_dir="$1"
+    local bypass="${2:-false}"
+
+    if [[ "$bypass" == "true" ]]; then
+        cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "statusLine": {
+    "type": "command",
+    "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
+  }
+}
+SETTINGS_EOF
+    else
+        cat > "$config_dir/settings.json" << 'SETTINGS_EOF'
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
+  }
+}
+SETTINGS_EOF
+    fi
+}
+
+# 写入 CLAUDE.md 到环境 .claude 目录
+_write_env_claude_md() {
+    local config_dir="$1"
+    local env_name="$2"
+    cat > "$config_dir/CLAUDE.md" << CLAUDEMD_EOF
+# cac managed environment
+
+This Claude Code instance is managed by **cac** (Claude Code Cloak).
+
+- Environment name: \`$env_name\`
+- Config directory: \`CLAUDE_CONFIG_DIR\` is set to this \`.claude/\` folder
+- Your settings, credentials, and sessions are isolated per-environment
+
+Useful commands:
+- \`cac env ls\` — list all environments and their config paths
+- \`cac env check\` — verify current environment health
+- \`cac <name>\` — switch to another environment
+CLAUDEMD_EOF
+}
 
 _write_wrapper() {
     mkdir -p "$CAC_DIR/bin"
