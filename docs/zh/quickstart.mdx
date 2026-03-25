@@ -20,6 +20,10 @@ icon: "rocket"
     </Tabs>
 
     无需 `setup` 命令——cac 在首次使用时自动初始化。
+
+    <Warning>
+    如果你本地启动了 **Clash、Shadowrocket、Surge、sing-box** 等代理/VPN 工具，**建议在使用 cac 时先关闭**。TUN 模式的代理兼容性目前仍属于实验性功能，可能会产生冲突。即使发生冲突，cac 也会**自动停止连接**（fail-closed），而不会泄露你的真实 IP——隐私安全始终受到保障。
+    </Warning>
   </Step>
 
   <Step title="安装 Claude Code 版本">
@@ -35,7 +39,7 @@ icon: "rocket"
   </Step>
 
   <Step title="创建环境">
-    每个环境都有隔离的身份标识（UUID、主机名、MAC）和独立的 `.claude` 配置目录。
+    每个环境都有隔离的身份标识（UUID、主机名、MAC）、独立的 `.claude` 配置目录，并自动下载最新版 Claude Code。
 
     ```bash
     # 最小化——仅身份隔离
@@ -48,33 +52,44 @@ icon: "rocket"
     cac env create work -p 1.2.3.4:1080:user:pass -c 2.1.81
     ```
 
+    环境创建后**自动激活**——无需额外的 activate 步骤。
+
     <Info>
     代理是可选的。如果你使用 API Key 和 Base URL，完全不需要 `-p` 参数。参见 [API Key 用户](/guides/api-key-users)。
     </Info>
   </Step>
 
-  <Step title="激活并运行">
+  <Step title="运行 Claude Code">
     ```bash
-    cac work
     claude
     ```
 
     首次使用时，在 Claude Code 中输入 `/login` 完成 OAuth 认证。之后直接运行 `claude` 即可。
+
+    切换环境：`cac <name>`（例如 `cac work`）。
   </Step>
 </Steps>
 
 ## 刚才发生了什么？
 
-当你激活 `work` 并运行 `claude` 时，cac 的包装器：
+当你创建环境并运行 `claude` 时，cac 的包装器：
 
 1. 将 `CLAUDE_CONFIG_DIR` 设置为 `~/.cac/envs/work/.claude/`（隔离配置）
-2. 从 `~/.cac/versions/2.1.81/claude` 解析锁定的 Claude Code 二进制文件
+2. 解析并使用对应版本的 Claude Code 二进制文件
 3. 注入设备指纹代理脚本（主机名、UUID、MAC）
 4. 通过 DNS 守卫 + 环境变量拦截遥测端点
 5. 通过你的代理路由流量（如果已配置）
 6. 启动真正的 Claude Code 二进制文件
 
 这一切对 Claude Code 来说是透明的——它看到的是一个正常的环境。
+
+## 使用建议
+
+- **随时验证**: 运行 `cac env check` 确认你的隐私保护是否正常工作。你可以放心信赖它的结果——如果全绿，说明你受到了完整保护。
+- **确认 claude 来源**: `which claude` 可以查看你使用的是 cac 托管的 wrapper（`~/.cac/bin/claude`）还是系统默认的 claude。
+- **自动安全检查**: 每次启动新的 Claude Code 会话时，cac 会自动快速运行一次检查。如果环境或隐私存在问题，会话会在发送任何数据之前被终止。
+- **网络稳定性**: 代理连接可能出现波动。cac 强制所有流量走代理——如果代理断开，流量会完全停止，而不是回退到直连。你的 IP 永远不会被意外暴露。
+- **创建后可修改**: 使用 `cac env set` 随时更改代理或版本，无需重建环境。
 
 ## 下一步
 

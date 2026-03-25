@@ -56,10 +56,11 @@ Activating an environment is **global** — it affects all terminals and all pro
 
 ```bash
 cac work              # activate "work" environment
-cac env deactivate    # go back to unprotected mode
 ```
 
 When activated, the cac wrapper intercepts every `claude` invocation and applies the environment's settings.
+
+New environments are automatically activated on creation — no separate activate step needed.
 
 ## Proxy is optional
 
@@ -79,6 +80,25 @@ When you reference a version that isn't installed yet, cac downloads it automati
 ```bash
 # Version 2.1.81 not installed? cac downloads it first, then creates the env.
 cac env create work -c 2.1.81
+```
+
+Using `-c latest` resolves to the current latest version at the time of creation and pins that resolved version number.
+
+## Modifying environments
+
+After creation, use `cac env set` to change an environment's proxy or pinned version without recreating it:
+
+```bash
+cac env set work proxy socks5://newproxy:1080   # change proxy
+cac env set work proxy --remove                  # remove proxy
+cac env set work version 2.1.81                  # pin a version
+cac env set work version latest                  # resolve and pin latest
+
+# Shorthand — omit "set" when using the env name directly
+cac env work proxy socks5://newproxy:1080
+
+# Omit name to target the currently active environment
+cac env set proxy socks5://newproxy:1080
 ```
 
 ## Auto-relay

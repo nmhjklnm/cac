@@ -46,6 +46,6 @@ No manual configuration needed.
 
 ## Health check bypass
 
-Claude Code pings `api.anthropic.com` at startup. Through a proxy, Cloudflare often returns 403 (Node.js TLS fingerprint rejection). cac bypasses this by temporarily running a local HTTPS server on port 443 with a trusted certificate, so the health check resolves instantly.
+Claude Code pings `api.anthropic.com/api/hello` at startup. Through a proxy, Cloudflare returns 403 due to Node.js TLS fingerprint rejection (JA3/JA4).
 
-This is automatic and only active for the first few seconds of each `claude` session.
+cac bypasses this with in-process Node.js interception: `https.request` and `fetch` calls to that URL are patched to return a fake HTTP 200 immediately — no local server, no port binding, no root needed. This is automatic and produces no network traffic.

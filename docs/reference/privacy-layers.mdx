@@ -86,9 +86,9 @@ Works at the `gethostbyname()` level — a backup for DNS guard.
 
 ## Layer 5: Health check bypass
 
-Claude Code pings `api.anthropic.com/api/hello` at startup. Through a proxy, Cloudflare returns 403.
+Claude Code pings `api.anthropic.com/api/hello` at startup. Through a proxy, Cloudflare returns 403 due to Node.js TLS fingerprint rejection (JA3/JA4).
 
-cac's `dns-guard.js` intercepts `https.request` and `fetch` calls to this URL in-process and returns a fake HTTP 200 response. No local HTTPS server, no `/etc/hosts` modification, and no root privileges are needed. The interception is transparent and happens entirely within the Node.js process.
+cac's `dns-guard.js` uses in-process Node.js interception: it patches `https.request` and `fetch` so that calls to this URL immediately return a fake HTTP 200 — no local server, no port binding, no root needed. The interception is entirely in-process and produces no network traffic.
 
 Only active when proxy is configured.
 

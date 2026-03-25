@@ -17,7 +17,9 @@ icon: "folder-tree"
 ├── envs/                         # environments
 │   └── work/
 │       ├── .claude/              # isolated CLAUDE_CONFIG_DIR
-│       │   ├── settings.json
+│       │   ├── settings.json         # Claude Code settings (statusline, permissions)
+│       │   ├── statusline-command.sh # status bar script
+│       │   ├── CLAUDE.md             # cac orientation for Claude Code
 │       │   ├── projects/
 │       │   └── ...
 │       ├── proxy                 # proxy URL (optional)
@@ -55,7 +57,6 @@ icon: "folder-tree"
 │   └── hb_key.pem                # health check bypass key
 │
 ├── current                       # name of active environment
-├── stopped                       # presence = deactivated
 ├── real_claude                   # path to system Claude Code binary
 └── relay.pid / relay.port        # relay process state
 ```

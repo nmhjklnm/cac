@@ -56,10 +56,26 @@ cac claude ls
 
 ```bash
 cac work              # 激活 "work" 环境
-cac env deactivate    # 回到无保护模式
 ```
 
 激活后，cac 包装器会拦截每次 `claude` 调用并应用该环境的设置。
+
+创建环境时会自动激活，无需手动运行 `cac env activate`。
+
+## 修改环境
+
+使用 `cac env set` 可以在创建后修改环境配置：
+
+```bash
+cac env set work proxy 1.2.3.4:1080:user:pass   # 设置代理
+cac env set work proxy --remove                  # 移除代理
+cac env set work version 2.1.81                  # 更换版本
+cac env set work version latest                  # 切换到最新版本
+
+# 快捷方式（不指定 name 则使用当前环境）
+cac env work proxy 1.2.3.4:1080:user:pass
+cac env proxy 1.2.3.4:1080:user:pass             # 修改当前环境
+```
 
 ## 代理是可选的
 
@@ -80,6 +96,8 @@ cac env deactivate    # 回到无保护模式
 # 版本 2.1.81 未安装？cac 会先下载，然后创建环境。
 cac env create work -c 2.1.81
 ```
+
+`-c latest` 会自动解析为当前最新版本，无需手动查找版本号。
 
 ## 自动中继
 

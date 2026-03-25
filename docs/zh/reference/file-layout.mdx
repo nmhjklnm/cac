@@ -18,6 +18,8 @@ icon: "folder-tree"
 │   └── work/
 │       ├── .claude/              # 隔离的 CLAUDE_CONFIG_DIR
 │       │   ├── settings.json
+│       │   ├── statusline-command.sh
+│       │   ├── CLAUDE.md
 │       │   ├── projects/
 │       │   └── ...
 │       ├── proxy                 # 代理 URL（可选）
@@ -55,7 +57,6 @@ icon: "folder-tree"
 │   └── hb_key.pem                # 健康检查绕过私钥
 │
 ├── current                       # 当前活跃环境的名称
-├── stopped                       # 存在 = 已停用
 ├── real_claude                   # 系统 Claude Code 二进制文件的路径
 └── relay.pid / relay.port        # 中继进程状态
 ```

@@ -51,11 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | ba
 # 安装 Claude Code
 cac claude install latest
 
-# 创建环境
-cac env create work -p 1.2.3.4:1080:u:p -c latest
-
-# 激活
-cac work
+# 创建环境（自动激活，自动使用最新版）
+cac env create work -p 1.2.3.4:1080:u:p
 
 # 启动 Claude Code（首次需 /login）
 claude
@@ -81,9 +78,12 @@ cac claude uninstall 2.1.81             # 卸载
 ### 环境管理
 
 ```bash
-cac env create <name> [-p <proxy>] [-c <version>] [--type local|container]
+cac env create <name> [-p <proxy>] [-c <version>]   # 创建并自动激活（自动解析最新版）
 cac env ls                              # 列出所有环境
 cac env rm <name>                       # 删除环境
+cac env set [name] proxy <url>          # 设置 / 修改代理
+cac env set [name] proxy --remove       # 移除代理
+cac env set [name] version <ver>        # 切换版本
 cac <name>                              # 激活环境（快捷方式）
 cac ls                                  # = cac env ls
 ```
@@ -104,18 +104,18 @@ cac ls                                  # = cac env ls
 | `cac claude ls` | 列出已安装版本 |
 | `cac claude pin <ver>` | 当前环境绑定版本 |
 | **环境管理** | |
-| `cac env create <name> [-p proxy] [-c ver]` | 创建环境 |
+| `cac env create <name> [-p proxy] [-c ver]` | 创建环境（自动激活） |
 | `cac env ls` | 列出环境 |
 | `cac env rm <name>` | 删除环境 |
+| `cac env set [name] <key> <value>` | 修改环境（proxy / version） |
+| `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
 | `cac <name>` | 激活环境 |
 | **自管理** | |
 | `cac self update` | 更新 cac 自身 |
+| `cac self delete` | 卸载 cac |
 | **其他** | |
 | `cac ls` | 列出环境（= `cac env ls`） |
-| `cac check` | 检查当前环境（`-d` 显示详情） |
-| `cac relay on\|off\|status` | 本地中转（绕过 TUN） |
-| `cac stop` / `cac resume` | 暂停 / 恢复保护 |
-| `cac delete` | 卸载 cac |
+| `cac check` | 检查当前环境（`cac env check` 的别名） |
 | `cac -v` | 版本号 |
 
 ### 代理格式
@@ -166,9 +166,11 @@ socks5://u:p@host:port    指定协议
 ├── current                   # 当前激活的环境名
 └── envs/<name>/
     ├── .claude/              # 隔离的 .claude 配置目录
+    │   ├── settings.json     # 环境专属设置
+    │   ├── CLAUDE.md         # 环境专属记忆
+    │   └── statusline-command.sh
     ├── proxy                 # 代理地址（可选）
     ├── version               # 绑定的 Claude Code 版本
-    ├── type                  # local / container
     ├── uuid / stable_id      # 隔离身份
     ├── hostname / mac_address / machine_id
     └── client_cert.pem       # mTLS 证书
@@ -190,8 +192,12 @@ cac docker port 6287 # 端口转发
 
 ### 注意事项
 
+> **代理工具冲突**：如果本地启动了 Clash、Shadowrocket、Surge、sing-box 等代理/VPN 工具，建议在使用 cac 时先关闭。TUN 模式兼容性仍属实验性功能。即使发生冲突，cac 也会自动停止连接（fail-closed），**不会泄露你的真实 IP**。
+
 - **首次登录**：启动 `claude` 后，输入 `/login` 完成 OAuth 授权
-- **TUN 冲突**：自动中继会自动绕过，也可手动 `cac relay on` 或在 TUN 软件中添加 DIRECT 规则
+- **安全验证**：随时运行 `cac env check` 确认隐私保护状态，也可以 `which claude` 确认使用的是 cac 托管的 claude
+- **自动安全检查**：每次启动 Claude Code 会话时，cac 会快速检查环境。如有异常会终止会话，不会发送任何数据
+- **网络稳定性**：流量严格走代理——代理断开时流量完全停止，不会回退直连
 - **IPv6**：建议系统级关闭，防止真实地址泄露
 
 ---
@@ -227,11 +233,8 @@ curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | ba
 # Install Claude Code
 cac claude install latest
 
-# Create environment
-cac env create work -p 1.2.3.4:1080:u:p -c latest
-
-# Activate
-cac work
+# Create environment (auto-activates, auto-resolves latest version)
+cac env create work -p 1.2.3.4:1080:u:p
 
 # Run Claude Code (first time: /login)
 claude
@@ -257,9 +260,12 @@ cac claude uninstall 2.1.81             # remove
 ### Environment management
 
 ```bash
-cac env create <name> [-p <proxy>] [-c <version>] [--type local|container]
+cac env create <name> [-p <proxy>] [-c <version>]   # create and auto-activate (auto-resolves latest)
 cac env ls                              # list all environments
 cac env rm <name>                       # remove environment
+cac env set [name] proxy <url>          # set / change proxy
+cac env set [name] proxy --remove       # remove proxy
+cac env set [name] version <ver>        # change version
 cac <name>                              # activate (shortcut)
 cac ls                                  # = cac env ls
 ```
@@ -280,18 +286,18 @@ Each environment is fully isolated:
 | `cac claude ls` | List installed versions |
 | `cac claude pin <ver>` | Pin current env to version |
 | **Environment management** | |
-| `cac env create <name> [-p proxy] [-c ver]` | Create environment |
+| `cac env create <name> [-p proxy] [-c ver]` | Create environment (auto-activates) |
 | `cac env ls` | List environments |
 | `cac env rm <name>` | Remove environment |
+| `cac env set [name] <key> <value>` | Modify environment (proxy / version) |
+| `cac env check [-d]` | Verify current environment (`-d` for details) |
 | `cac <name>` | Activate environment |
 | **Self-management** | |
 | `cac self update` | Update cac itself |
+| `cac self delete` | Uninstall cac |
 | **Other** | |
 | `cac ls` | List environments (= `cac env ls`) |
-| `cac check` | Verify current environment (`-d` for details) |
-| `cac relay on\|off\|status` | Local relay (bypass TUN) |
-| `cac stop` / `cac resume` | Pause / resume protection |
-| `cac delete` | Uninstall cac |
+| `cac check` | Verify environment (alias for `cac env check`) |
 | `cac -v` | Show version |
 
 ### Privacy protection
@@ -334,9 +340,11 @@ Each environment is fully isolated:
 ├── current                   # active environment name
 └── envs/<name>/
     ├── .claude/              # isolated .claude config directory
+    │   ├── settings.json     # env-specific settings
+    │   ├── CLAUDE.md         # env-specific memory
+    │   └── statusline-command.sh
     ├── proxy                 # proxy URL (optional)
     ├── version               # pinned Claude Code version
-    ├── type                  # local / container
     ├── uuid / stable_id      # isolated identity
     ├── hostname / mac_address / machine_id
     └── client_cert.pem       # mTLS cert
@@ -358,8 +366,12 @@ Proxy formats: `ip:port:user:pass` (SOCKS5), `ss://...`, `vmess://...`, `vless:/
 
 ### Notes
 
+> **Proxy tool conflicts**: If you have Clash, Shadowrocket, Surge, sing-box or other proxy/VPN tools running locally, turn them off before using cac. TUN-mode compatibility is still experimental. Even if a conflict occurs, cac will fail-closed — **your real IP is never exposed**.
+
 - **First login**: Run `claude`, then type `/login`. Health check is automatically bypassed.
-- **TUN conflicts**: Auto-relay bypasses TUN automatically. You can also use `cac relay on` or add a DIRECT rule in your TUN software.
+- **Verify your setup**: Run `cac env check` anytime. Use `which claude` to confirm you're using the cac-managed wrapper.
+- **Automatic safety checks**: Every new Claude Code session runs a quick cac check. If anything is wrong, the session is terminated before any data is sent.
+- **Network resilience**: Traffic is strictly routed through your proxy. If the proxy drops, traffic stops entirely — no fallback to direct connection.
 - **IPv6**: Recommend disabling system-wide to prevent real address exposure.
 
 ---

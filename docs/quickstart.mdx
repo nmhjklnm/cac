@@ -20,6 +20,10 @@ icon: "rocket"
     </Tabs>
 
     No `setup` command needed — cac auto-initializes on first use.
+
+    <Warning>
+    If you have **Clash, Shadowrocket, Surge, sing-box** or other proxy/VPN tools running locally, **turn them off before using cac**. TUN-mode proxy compatibility is still experimental and may cause connection conflicts. Even if a conflict occurs, cac will **fail-closed** (refuse to connect) rather than leak your real IP — your privacy is always protected.
+    </Warning>
   </Step>
 
   <Step title="Install a Claude Code version">
@@ -35,7 +39,7 @@ icon: "rocket"
   </Step>
 
   <Step title="Create an environment">
-    Every environment gets an isolated identity (UUID, hostname, MAC) and its own `.claude` config directory.
+    Every environment gets an isolated identity (UUID, hostname, MAC), its own `.claude` config directory, and auto-downloads the latest Claude Code version.
 
     ```bash
     # Minimal — just identity isolation
@@ -48,18 +52,21 @@ icon: "rocket"
     cac env create work -p 1.2.3.4:1080:user:pass -c 2.1.81
     ```
 
+    The environment is **automatically activated** after creation — no separate activate step needed.
+
     <Info>
     Proxy is optional. If you use an API key with a base URL, you don't need `-p` at all. See [API key users](/guides/api-key-users).
     </Info>
   </Step>
 
-  <Step title="Activate and run">
+  <Step title="Run Claude Code">
     ```bash
-    cac work
     claude
     ```
 
     The first time, type `/login` in Claude Code to complete OAuth. After that, just `claude`.
+
+    To switch environments later: `cac <name>` (e.g. `cac work`).
   </Step>
 </Steps>
 
@@ -75,6 +82,14 @@ When you activated `work` and ran `claude`, cac's wrapper:
 6. Launched the real Claude Code binary
 
 All of this is invisible to Claude Code — it sees a normal environment.
+
+## Tips
+
+- **Verify your setup**: Run `cac env check` anytime to confirm your privacy protection is working. You can trust its results — if it says all green, you're protected.
+- **Check which claude you're running**: `which claude` shows whether you're using the cac-managed wrapper (`~/.cac/bin/claude`) or the default system claude.
+- **Automatic safety checks**: Every time you start a new Claude Code session, cac automatically runs a quick check. If your environment or privacy has any issue, the session is terminated before any data is sent.
+- **Network resilience**: Proxy connections can be unstable. cac enforces strict proxy routing — if the proxy drops, traffic stops entirely rather than falling back to a direct connection. Your IP is never accidentally exposed.
+- **Modify environments after creation**: Use `cac env set` to change proxy or version without recreating the environment.
 
 ## Next steps
 
