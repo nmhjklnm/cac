@@ -28,6 +28,9 @@ _ensure_initialized() {
     local rc_file; rc_file=$(_detect_rc_file)
     _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
 
+    # Keep .latest pointing to highest installed version
+    _update_latest 2>/dev/null || true
+
     # Rest only needed on first init
     [[ -f "$CAC_DIR/bin/claude" ]] && return 0
 

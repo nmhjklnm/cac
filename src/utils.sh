@@ -125,6 +125,25 @@ _env_dir()      { echo "$ENVS_DIR/$1"; }
 
 # ── Version management helpers ────────────────────────────────────
 
+# Find the highest installed version by semver sort
+_update_latest() {
+    local highest=""
+    for d in "$VERSIONS_DIR"/*/; do
+        [[ -d "$d" ]] || continue
+        local v
+        v=$(basename "$d")
+        [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
+        if [[ -z "$highest" ]] || [[ "$(printf '%s\n%s\n' "$highest" "$v" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$v" ]]; then
+            highest="$v"
+        fi
+    done
+    if [[ -n "$highest" ]]; then
+        echo "$highest" > "$VERSIONS_DIR/.latest"
+    else
+        rm -f "$VERSIONS_DIR/.latest"
+    fi
+}
+
 _resolve_version() {
     local v="$1"
     if [[ "$v" == "latest" || -z "$v" ]]; then
@@ -187,7 +206,7 @@ _ensure_version_installed() {
         echo "Version $(_cyan "$ver") not installed, downloading ..." >&2
         mkdir -p "$VERSIONS_DIR"
         _download_version "$ver" >&2 || return 1
-        echo "$ver" > "$VERSIONS_DIR/.latest"
+        _update_latest
         echo >&2
     fi
     echo "$ver"

@@ -78,7 +78,7 @@ _claude_cmd_install() {
 
     mkdir -p "$VERSIONS_DIR"
     if _download_version "$ver"; then
-        echo "$ver" > "$VERSIONS_DIR/.latest"
+        _update_latest
         echo
         echo "  Bind to environment: $(_cyan "cac env create <name> -c $ver")"
     fi
@@ -93,10 +93,12 @@ _claude_cmd_uninstall() {
     [[ "$count" -eq 0 ]] || _die "version $(_cyan "$ver") in use by $count environment(s)"
 
     rm -rf "${VERSIONS_DIR:?}/$ver"
+    _update_latest
     echo "$(_green_bold "Uninstalled") Claude Code $(_cyan "$ver")"
 }
 
 _claude_cmd_ls() {
+    _update_latest 2>/dev/null || true
     if [[ ! -d "$VERSIONS_DIR" ]] || [[ -z "$(ls -A "$VERSIONS_DIR" 2>/dev/null)" ]]; then
         echo "$(_dim "  No versions installed.")"
         echo "  Run $(_green "cac claude install") to get started."
