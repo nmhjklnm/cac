@@ -24,6 +24,10 @@ _ensure_initialized() {
     _write_dns_guard_js 2>/dev/null || true
     _write_blocked_hosts 2>/dev/null || true
 
+    # PATH (idempotent — always ensure it's in rc file)
+    local rc_file; rc_file=$(_detect_rc_file)
+    _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
+
     # Rest only needed on first init
     [[ -f "$CAC_DIR/bin/claude" ]] && return 0
 
@@ -54,10 +58,6 @@ _ensure_initialized() {
 
     # mTLS CA
     _generate_ca_cert 2>/dev/null || true
-
-    # PATH (idempotent)
-    local rc_file; rc_file=$(_detect_rc_file)
-    _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true
 }
 
 # Explicit setup command — runs initialization with verbose output

@@ -286,10 +286,15 @@ _write_path_to_rc() {
     cat >> "$rc_file" << 'CACEOF'
 
 # >>> cac — Claude Code Cloak >>>
-# Remove existing cac paths then prepend, so cac wrapper always wins
-# even after nvm/pyenv/etc. modify PATH
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | grep -v "$HOME/bin" | tr '\n' ':' | sed 's/:$//')
 export PATH="$HOME/.cac/bin:$HOME/bin:$PATH"
+cac() {
+    command "$HOME/bin/cac" "$@"
+    local _rc=$?
+    PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.cac/bin' | tr '\n' ':' | sed 's/:$//')
+    export PATH="$HOME/.cac/bin:$HOME/bin:$PATH"
+    return $_rc
+}
 # <<< cac — Claude Code Cloak <<<
 CACEOF
     echo "  ✓ PATH 已写入 $rc_file"
