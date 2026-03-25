@@ -2028,7 +2028,13 @@ cmd_check() {
         if ! _proxy_reachable "$proxy"; then
             problems+=("proxy unreachable: $proxy")
         else
-            proxy_ip=$(curl -s --proxy "$proxy" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+            local _ip_url
+            for _ip_url in https://ifconfig.me https://api.ipify.org https://ipinfo.io/ip; do
+                proxy_ip=$(curl -s --proxy "$proxy" --connect-timeout 5 "$_ip_url" 2>/dev/null || true)
+                # Validate: should look like an IP address
+                [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+                proxy_ip=""
+            done
             if [[ -n "$proxy_ip" ]]; then
                 checks+=("$(_green "✓") exit IP    $(_cyan "$proxy_ip")")
             else
