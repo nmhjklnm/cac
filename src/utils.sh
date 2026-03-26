@@ -357,9 +357,13 @@ _update_statsig() {
     local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     local statsig="$config_dir/statsig"
     [[ -d "$statsig" ]] || return 0
+    local found=false
     for f in "$statsig"/statsig.stable_id.*; do
-        [[ -f "$f" ]] && printf '"%s"' "$sid" > "$f"
+        [[ -f "$f" ]] && { printf '"%s"' "$sid" > "$f"; found=true; }
     done
+    if [[ "$found" == "false" ]]; then
+        printf '"%s"' "$sid" > "$statsig/statsig.stable_id.local"
+    fi
 }
 
 _update_claude_json_user_id() {
@@ -369,11 +373,16 @@ _update_claude_json_user_id() {
     [[ -f "$claude_json" ]] || claude_json="$HOME/.claude.json"
     [[ -f "$claude_json" ]] || return 0
     python3 - "$claude_json" "$user_id" << 'PYEOF'
-import json, sys
+import json, sys, uuid
 fpath, uid = sys.argv[1], sys.argv[2]
 with open(fpath) as f:
     d = json.load(f)
 d['userID'] = uid
+d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
+d.pop('numStartups', None)
+d.pop('firstStartTime', None)
+d.pop('cachedGrowthBookFeatures', None)
+d.pop('cachedStatsigGates', None)
 with open(fpath, 'w') as f:
     json.dump(d, f, indent=2, ensure_ascii=False)
 PYEOF

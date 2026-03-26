@@ -5,6 +5,7 @@ TELEMETRY_DOMAINS=(
     "statsig.anthropic.com"
     "sentry.io"
     "o1137031.ingest.sentry.io"
+    "cdn.growthbook.io"
 )
 
 # 写入 HOSTALIASES 文件（备用层：gethostbyname 级别拦截）
@@ -44,6 +45,7 @@ var BLOCKED_DOMAINS = new Set([
     'statsig.anthropic.com',
     'sentry.io',
     'o1137031.ingest.sentry.io',
+    'cdn.growthbook.io',
 ]);
 
 /**

@@ -183,9 +183,13 @@ fi
 if [[ -f "$_env_dir/stable_id" ]]; then
     _sid=$(tr -d '[:space:]' < "$_env_dir/stable_id")
     _config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    for _f in "$_config_dir/statsig"/statsig.stable_id.*; do
-        [[ -f "$_f" ]] && printf '"%s"' "$_sid" > "$_f"
-    done
+    if [[ -d "$_config_dir/statsig" ]]; then
+        _sid_found=false
+        for _f in "$_config_dir/statsig"/statsig.stable_id.*; do
+            [[ -f "$_f" ]] && { printf '"%s"' "$_sid" > "$_f"; _sid_found=true; }
+        done
+        [[ "$_sid_found" == "false" ]] && printf '"%s"' "$_sid" > "$_config_dir/statsig/statsig.stable_id.local"
+    fi
 fi
 
 # 注入环境变量 —— 代理（仅在配置了代理时）

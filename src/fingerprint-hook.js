@@ -19,12 +19,18 @@ if (fakeMac) {
   const _origNetworkInterfaces = os.networkInterfaces.bind(os);
   os.networkInterfaces = () => {
     const ifaces = _origNetworkInterfaces();
+    const macParts = fakeMac.split(':').map(h => parseInt(h, 16));
+    let ifIdx = 0;
     for (const name of Object.keys(ifaces)) {
       for (const info of ifaces[name]) {
         if (info.mac && info.mac !== '00:00:00:00:00:00') {
-          info.mac = fakeMac;
+          // Derive per-interface MAC: XOR last octet with interface index
+          const derived = macParts.slice();
+          derived[5] = (derived[5] ^ ifIdx) & 0xff;
+          info.mac = derived.map(b => b.toString(16).padStart(2, '0')).join(':');
         }
       }
+      ifIdx++;
     }
     return ifaces;
   };
