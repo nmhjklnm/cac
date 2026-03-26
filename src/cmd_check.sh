@@ -93,50 +93,18 @@ cmd_check() {
                 printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")\033[K\n"
             fi
 
-            # TUN conflict detection
-            if [[ -n "$proxy_ip" ]]; then
-            local os; os=$(_detect_os)
-            local has_conflict=false
-            local tun_procs="clash|mihomo|sing-box|surge|shadowrocket|v2ray|xray|hysteria|tuic|nekoray"
-            local running
-            if [[ "$os" == "macos" ]]; then
-                running=$(ps aux 2>/dev/null | grep -iE "$tun_procs" | grep -v grep || true)
-            else
-                running=$(ps -eo comm 2>/dev/null | grep -iE "$tun_procs" || true)
-            fi
-            [[ -n "$running" ]] && has_conflict=true
-            if [[ "$os" == "macos" ]]; then
-                local tun_count; tun_count=$(ifconfig 2>/dev/null | grep -cE '^utun[0-9]+' || echo 0)
-                [[ "$tun_count" -gt 3 ]] && has_conflict=true
-            elif [[ "$os" == "linux" ]]; then
-                ip link show tun0 >/dev/null 2>&1 && has_conflict=true
-            fi
-
-            if [[ "$has_conflict" == "true" ]]; then
-                local relay_ok=false
-                if _relay_is_running 2>/dev/null; then
-                    local rport; rport=$(_read "$CAC_DIR/relay.port" "")
-                    local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
-                    [[ -n "$relay_ip" ]] && relay_ok=true
-                elif [[ -f "$CAC_DIR/relay.js" ]]; then
-                    local _test_env; _test_env=$(_current_env)
-                    if _relay_start "$_test_env" 2>/dev/null; then
-                        local rport; rport=$(_read "$CAC_DIR/relay.port" "")
-                        local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
-                        _relay_stop 2>/dev/null || true
-                        [[ -n "$relay_ip" ]] && relay_ok=true
+            # TUN conflict detection — check route instead of relay connectivity
+            if _detect_tun_active 2>/dev/null; then
+                if _relay_route_ok "$proxy" 2>/dev/null; then
+                    echo "    $(_green "✓") TUN        direct route OK"
+                else
+                    if _relay_add_route "$proxy" 2>/dev/null; then
+                        echo "    $(_green "✓") TUN        direct route $(_dim "added")"
+                    else
+                        echo "    $(_red "✗") TUN        route missing — may need sudo"
+                        problems+=("TUN active but direct route missing for proxy")
                     fi
                 fi
-
-                if [[ "$relay_ok" == "true" ]]; then
-                    echo "    $(_green "✓") TUN        relay bypass active"
-                else
-                    local proxy_hp; proxy_hp=$(_proxy_host_port "$proxy")
-                    local proxy_host="${proxy_hp%%:*}"
-                    echo "    $(_red "✗") TUN        conflict — add DIRECT rule for $proxy_host"
-                    problems+=("TUN conflict: add DIRECT rule for $proxy_host in proxy software")
-                fi
-            fi
             fi
         fi
     else

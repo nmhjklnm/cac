@@ -117,7 +117,7 @@ function socks5Connect(targetHost, targetPort, cb) {
     }
   });
 
-  sock.on('error', (err) => cb(err));
+  sock.on('error', (err) => { log('socks5 socket error: ' + err.message); cb(err); });
 }
 
 // ── HTTP CONNECT upstream ───────────────────────────────────────
@@ -154,12 +154,13 @@ function httpConnect(targetHost, targetPort, cb) {
     });
   });
 
-  sock.on('error', (err) => cb(err));
+  sock.on('error', (err) => { log('http upstream error: ' + err.message); cb(err); });
 }
 
 // ── Connect to upstream (protocol dispatch) ─────────────────────
 
 function connectUpstream(targetHost, targetPort, cb) {
+  log('CONNECT ' + targetHost + ':' + targetPort + ' via ' + upstreamHost + ':' + upstreamPort);
   if (isSocks5) {
     socks5Connect(targetHost, targetPort, cb);
   } else {
@@ -226,6 +227,7 @@ function handleConnect(clientSock, targetHost, targetPort, headerRest) {
   function doConnect(trailingData) {
     connectUpstream(targetHost, targetPort, (err, upstreamSock, upstreamExtra) => {
       if (err) {
+        log('502 → ' + targetHost + ':' + targetPort + ' — ' + err.message + ' (code=' + (err.code || 'none') + ')');
         clientSock.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
         clientSock.destroy();
         return;
