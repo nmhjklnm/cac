@@ -76,11 +76,13 @@ cmd_check() {
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
         else
-            # Show spinner while detecting IP
-            printf "    · exit IP    $(_dim "detecting...")"
-            local _ip_url _attempt
+            # Show progress: each URL attempt adds a dot
+            printf "    · exit IP    $(_dim "detecting")"
+            local _ip_url _attempt _dots=""
             for _attempt in 1 2; do
                 for _ip_url in https://api.ipify.org https://ipinfo.io/ip https://ifconfig.me; do
+                    _dots="${_dots}."
+                    printf "\r    · exit IP    $(_dim "detecting${_dots}")"
                     proxy_ip=$(curl --proxy "$proxy" --connect-timeout 5 --max-time 8 "$_ip_url" 2>/dev/null || true)
                     [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break 2
                     proxy_ip=""
