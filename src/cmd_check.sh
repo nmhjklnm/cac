@@ -76,10 +76,9 @@ cmd_check() {
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
         else
-            # Fast retry with dots: try primary URL multiple times, then fallbacks
-            printf "    · exit IP    $(_dim "detecting")"
-            local _ip_url _attempt _dots=""
-            local _urls="https://ip.3322.net https://api.ip.sb/ip https://ip.3322.net https://api.ipify.org https://ipinfo.io/ip"
+            # Fast retry with dots: each attempt adds a dot
+            local _ip_url _dots=""
+            local _urls="https://api.ip.sb/ip https://ip.3322.net https://api.ipify.org https://ipinfo.io/ip https://api.ip.sb/ip"
             for _ip_url in $_urls; do
                 _dots="${_dots}."
                 printf "\r    · exit IP    $(_dim "detecting${_dots}")"
