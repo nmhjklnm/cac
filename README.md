@@ -1,6 +1,6 @@
 <div align="center">
 
-# cac
+# 🧥 cac
 
 **Claude Code 小雨衣** — Isolate, protect, and manage your Claude Code.
 
