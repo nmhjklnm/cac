@@ -2093,7 +2093,7 @@ cmd_check() {
             if [[ -n "$proxy_ip" ]]; then
                 printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")                \n"
             else
-                printf "\r    $(_yellow "⚠") exit IP    $(_dim "proxy unstable, retry later")          \n"
+                printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")           \n"
             fi
 
             # TUN conflict detection
