@@ -2088,9 +2088,9 @@ cmd_check() {
             done
             # Overwrite the "detecting..." line
             if [[ -n "$proxy_ip" ]]; then
-                printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")                \n"
+                printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")\033[K\n"
             else
-                printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")           \n"
+                printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")\033[K\n"
             fi
 
             # TUN conflict detection
