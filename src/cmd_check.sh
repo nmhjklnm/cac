@@ -93,7 +93,7 @@ cmd_check() {
             if [[ -n "$proxy_ip" ]]; then
                 printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")                \n"
             else
-                printf "\r    $(_yellow "⚠") exit IP    $(_dim "proxy connected, detection timed out")  \n"
+                printf "\r    $(_yellow "⚠") exit IP    $(_dim "proxy unstable, retry later")          \n"
             fi
 
             # TUN conflict detection
