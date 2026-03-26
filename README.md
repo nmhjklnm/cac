@@ -1,6 +1,10 @@
 <div align="center">
 
-# 🧥 cac
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/logo-light.svg">
+  <img alt="cac" src="docs/images/logo-light.svg" width="200">
+</picture>
 
 **Claude Code 小雨衣** — Isolate, protect, and manage your Claude Code.
 
