@@ -2051,17 +2051,19 @@ cmd_check() {
         if ! _proxy_reachable "$proxy"; then
             problems+=("proxy unreachable: $proxy")
         else
-            local _ip_url
-            for _ip_url in https://ifconfig.me https://api.ipify.org https://ipinfo.io/ip; do
-                proxy_ip=$(curl -s --proxy "$proxy" --connect-timeout 5 "$_ip_url" 2>/dev/null || true)
-                # Validate: should look like an IP address
-                [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
-                proxy_ip=""
+            local _ip_url _attempt
+            for _attempt in 1 2; do
+                for _ip_url in https://api.ipify.org https://ipinfo.io/ip https://ifconfig.me; do
+                    proxy_ip=$(curl --proxy "$proxy" --connect-timeout 5 --max-time 8 "$_ip_url" 2>/dev/null || true)
+                    [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break 2
+                    proxy_ip=""
+                done
+                [[ "$_attempt" -lt 2 ]] && sleep 1
             done
             if [[ -n "$proxy_ip" ]]; then
                 checks+=("$(_green "✓") exit IP    $(_cyan "$proxy_ip")")
             else
-                problems+=("failed to get exit IP")
+                checks+=("$(_yellow "⚠") exit IP    $(_dim "proxy connected, IP detection timed out")")
             fi
         fi
 
@@ -2089,13 +2091,13 @@ cmd_check() {
             local relay_ok=false
             if _relay_is_running 2>/dev/null; then
                 local rport; rport=$(_read "$CAC_DIR/relay.port" "")
-                local relay_ip; relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+                local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
                 [[ -n "$relay_ip" ]] && relay_ok=true
             elif [[ -f "$CAC_DIR/relay.js" ]]; then
                 local _test_env; _test_env=$(_current_env)
                 if _relay_start "$_test_env" 2>/dev/null; then
                     local rport; rport=$(_read "$CAC_DIR/relay.port" "")
-                    local relay_ip; relay_ip=$(curl -s --proxy "http://127.0.0.1:$rport" --connect-timeout 8 https://api.ipify.org 2>/dev/null || true)
+                    local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
                     _relay_stop 2>/dev/null || true
                     [[ -n "$relay_ip" ]] && relay_ok=true
                 fi
