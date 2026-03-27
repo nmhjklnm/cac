@@ -24,6 +24,7 @@ cmd_docker.sh → cmd_delete.sh → cmd_version.sh → cmd_help.sh → main.sh
 ```
 
 Key files:
+- `cmd_setup.sh` — `_ensure_initialized()` auto-bootstrap (no user-facing command)
 - `cmd_claude.sh` — `cac claude install/ls/pin/uninstall` (version management)
 - `cmd_env.sh` — `cac env create/ls/rm/activate/deactivate` (environment management)
 - `cmd_self.sh` — `cac self update/delete`
@@ -52,7 +53,7 @@ cac <name>                                       # shortcut for env activate
 
 **Auto-relay** — TUN interfaces auto-detected (`tun*`/`utun*`). When proxy + TUN both present, relay starts automatically (loopback bypasses TUN).
 
-**Auto-bootstrap** — `_ensure_initialized` runs silently on first command. No manual `cac setup` needed.
+**Auto-bootstrap** — `_ensure_initialized` runs silently on first command. No manual setup step exists.
 
 ## Runtime Data
 

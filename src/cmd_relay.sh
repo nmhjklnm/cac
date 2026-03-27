@@ -7,7 +7,7 @@ _relay_start() {
     [[ -z "$proxy" ]] && return 1
 
     local relay_js="$CAC_DIR/relay.js"
-    [[ -f "$relay_js" ]] || { echo "error: relay.js not found, run 'cac setup'" >&2; return 1; }
+    [[ -f "$relay_js" ]] || { echo "error: relay.js not found, reinstall with 'npm i -g claude-cac'" >&2; return 1; }
 
     # find available port (17890-17999)
     local port=17890

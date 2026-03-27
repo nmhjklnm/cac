@@ -1,6 +1,6 @@
-# ── cmd: setup (auto-bootstrap, no manual step needed) ─────────
+# ── auto-bootstrap (silent, idempotent) ─────────────────────────
 
-# Silent, idempotent initialization — called automatically by any command
+# Called automatically by any command — no manual setup needed
 _ensure_initialized() {
     mkdir -p "$CAC_DIR" "$ENVS_DIR" "$VERSIONS_DIR"
 
@@ -68,42 +68,4 @@ _ensure_initialized() {
 
     # mTLS CA
     _generate_ca_cert 2>/dev/null || true
-}
-
-# Explicit setup command — runs initialization with verbose output
-cmd_setup() {
-    echo "$(_bold "cac setup")"
-    echo
-
-    _ensure_initialized
-
-    # Find or install Claude Code
-    local real_claude; real_claude=$(_read "$CAC_DIR/real_claude" "")
-    if [[ -z "$real_claude" ]] || [[ ! -x "$real_claude" ]]; then
-        echo "  Claude Code not found"
-        printf "  Install latest version? [Y/n] "
-        read -r _ans
-        if [[ "$_ans" != "n" && "$_ans" != "N" ]]; then
-            _claude_cmd_install latest
-            local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
-            if [[ -n "$latest_ver" ]]; then
-                real_claude="$VERSIONS_DIR/$latest_ver/claude"
-                echo "$real_claude" > "$CAC_DIR/real_claude"
-            fi
-        fi
-    fi
-
-    if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
-        echo "  Claude Code: $(_cyan "$real_claude")"
-    fi
-    echo "  Wrapper: $(_cyan "$CAC_DIR/bin/claude")"
-    echo "  Shims: $(_cyan "$CAC_DIR/shim-bin/")"
-    echo
-
-    local rc_file; rc_file=$(_detect_rc_file)
-    if [[ -n "$rc_file" ]]; then
-        echo "  Run to activate: $(_green "source $rc_file")"
-    fi
-    echo
-    echo "  Create environment: $(_green "cac env create <name> [-p <proxy>]")"
 }

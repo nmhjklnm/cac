@@ -153,7 +153,7 @@ ENVS_DIR="$CAC_DIR/envs"
 if [[ -f "$CAC_DIR/stopped" ]]; then
     _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude" 2>/dev/null || true)
     [[ -x "$_real" ]] && exec "$_real" "$@"
-    echo "[cac] error: real claude not found, run 'cac setup'" >&2; exit 1
+    echo "[cac] error: real claude not found, reinstall with 'npm i -g claude-cac'" >&2; exit 1
 fi
 
 # read current environment
@@ -342,7 +342,7 @@ fi
 if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
     _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude")
 fi
-[[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac setup'" >&2; exit 1; }
+[[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac claude install latest'" >&2; exit 1; }
 
 # ── Relay local forwarding (always enabled when proxy is set) ──
 _relay_active=false

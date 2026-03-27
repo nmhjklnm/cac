@@ -12,7 +12,7 @@ case "$1" in
     help|--help|-h)     cmd_help            ;;
     # ── deprecated (shims with warnings) ──
     add)                echo "$(_yellow "warning:") 'cac add' → 'cac env create <name> -p <proxy>'" >&2; exit 1 ;;
-    setup)              echo "$(_yellow "warning:") 'cac setup' is no longer needed — cac auto-initializes" >&2 ;;
+    setup)              echo "$(_yellow "removed:") 'cac setup' no longer exists — cac auto-initializes on first use" >&2 ;;
     check)              echo "$(_yellow "warning:") 'cac check' → 'cac env check'" >&2; cmd_check ;;
     stop)               echo "$(_yellow "warning:") 'cac stop' has been removed — switch with 'cac <name>'" >&2 ;;
     resume|-c)          echo "$(_yellow "warning:") 'cac resume' removed — use 'cac env activate <name>'" >&2; exit 1 ;;
