@@ -1,0 +1,326 @@
+// ═══════════════════════════════════════════════════════════════
+// cac-dns-guard.js
+// DNS-level telemetry domain blocking | mTLS certificate injection | fetch leak prevention
+// Injected into Claude Code process via NODE_OPTIONS="--require <this>"
+// ═══════════════════════════════════════════════════════════════
+'use strict';
+
+var dns  = require('dns');
+var net  = require('net');
+var tls  = require('tls');
+var http = require('http');
+var https = require('https');
+var fs   = require('fs');
+
+// ─── 1. DNS-level telemetry domain blocking ──────────────────────────────────
+
+var BLOCKED_DOMAINS = new Set([
+    'statsig.anthropic.com',
+    'sentry.io',
+    'o1137031.ingest.sentry.io',
+    'cdn.growthbook.io',
+]);
+
+/**
+ * Check if domain is in block list (including subdomain matching)
+ * e.g. "foo.sentry.io" matches "sentry.io"
+ */
+function isDomainBlocked(hostname) {
+    if (!hostname) return false;
+    var h = hostname.toLowerCase().replace(/\.$/,'');
+    if (BLOCKED_DOMAINS.has(h)) return true;
+    var parts = h.split('.');
+    for (var i = 1; i < parts.length - 1; i++) {
+        if (BLOCKED_DOMAINS.has(parts.slice(i).join('.'))) return true;
+    }
+    return false;
+}
+
+function makeBlockedError(hostname, syscall) {
+    var msg = 'connect ECONNREFUSED (blocked by cac): ' + hostname;
+    var err = new Error(msg);
+    err.code     = 'ECONNREFUSED';
+    err.errno    = -111;
+    err.hostname = hostname;
+    err.syscall  = syscall || 'connect';
+    return err;
+}
+
+// ── 1a. intercept dns.lookup ──
+var _origLookup = dns.lookup;
+dns.lookup = function cacLookup(hostname, options, callback) {
+    if (typeof options === 'function') { callback = options; options = {}; }
+    if (isDomainBlocked(hostname)) {
+        var err = makeBlockedError(hostname, 'getaddrinfo');
+        if (typeof callback === 'function') process.nextTick(function() { callback(err); });
+        return {};
+    }
+    return _origLookup.call(dns, hostname, options, callback);
+};
+
+// ── 1b. intercept dns.resolve / resolve4 / resolve6 ──
+['resolve','resolve4','resolve6'].forEach(function(method) {
+    var orig = dns[method];
+    if (!orig) return;
+    dns[method] = function(hostname) {
+        var args = Array.prototype.slice.call(arguments);
+        var cb = args[args.length - 1];
+        if (isDomainBlocked(hostname)) {
+            var err = makeBlockedError(hostname, 'query');
+            if (typeof cb === 'function') process.nextTick(function() { cb(err); });
+            return;
+        }
+        return orig.apply(dns, args);
+    };
+});
+
+// ── 1c. intercept dns.promises ──
+if (dns.promises) {
+    var _origPLookup = dns.promises.lookup;
+    if (_origPLookup) {
+        dns.promises.lookup = function cacPromiseLookup(hostname, options) {
+            if (isDomainBlocked(hostname)) return Promise.reject(makeBlockedError(hostname, 'getaddrinfo'));
+            return _origPLookup.call(dns.promises, hostname, options);
+        };
+    }
+    ['resolve','resolve4','resolve6'].forEach(function(method) {
+        var orig = dns.promises[method];
+        if (!orig) return;
+        dns.promises[method] = function(hostname) {
+            if (isDomainBlocked(hostname)) return Promise.reject(makeBlockedError(hostname, 'query'));
+            return orig.apply(dns.promises, arguments);
+        };
+    });
+}
+
+// ── 1d. network layer safety net: intercept net.connect to telemetry domains ──
+var _origNetConnect    = net.connect;
+var _origNetCreateConn = net.createConnection;
+
+function getHostFromArgs(args) {
+    if (typeof args[0] === 'object') return args[0].host || args[0].hostname || '';
+    return '';
+}
+
+function makeBlockedSocket(host) {
+    var sock = new net.Socket();
+    var err = makeBlockedError(host, 'connect');
+    process.nextTick(function() { sock.destroy(err); });
+    return sock;
+}
+
+net.connect = function cacNetConnect() {
+    var host = getHostFromArgs(arguments);
+    if (isDomainBlocked(host)) return makeBlockedSocket(host);
+    return _origNetConnect.apply(net, arguments);
+};
+net.createConnection = function cacNetCreateConnection() {
+    var host = getHostFromArgs(arguments);
+    if (isDomainBlocked(host)) return makeBlockedSocket(host);
+    return _origNetCreateConn.apply(net, arguments);
+};
+
+
+// ─── 2. mTLS certificate injection ──────────────────────────────────
+
+var mtlsCert = process.env.CAC_MTLS_CERT;
+var mtlsKey  = process.env.CAC_MTLS_KEY;
+var mtlsCa   = process.env.CAC_MTLS_CA;
+var proxyHostPort = process.env.CAC_PROXY_HOST || '';
+
+if (mtlsCert && mtlsKey) {
+    var certData, keyData, caData;
+    try {
+        certData = fs.readFileSync(mtlsCert);
+        keyData  = fs.readFileSync(mtlsKey);
+        if (mtlsCa) caData = fs.readFileSync(mtlsCa);
+    } catch(e) {
+        certData = null; keyData = null;
+    }
+
+    if (certData && keyData) {
+        // inject mTLS cert only for proxy connections
+        var proxyHost = proxyHostPort.split(':')[0];
+        var proxyPort = parseInt(proxyHostPort.split(':')[1], 10) || 0;
+
+        // 2a. intercept tls.connect, inject client cert for proxy connections
+        var _origTlsConnect = tls.connect;
+        tls.connect = function cacTlsConnect() {
+            // normalize parameters: tls.connect(options[, cb]) or tls.connect(port[, host][, options][, cb])
+            var args = Array.prototype.slice.call(arguments);
+            var options, callback;
+
+            if (typeof args[0] === 'object') {
+                options = args[0];
+                callback = (typeof args[1] === 'function') ? args[1] : undefined;
+            } else {
+                // tls.connect(port, host, options, cb) form
+                var port = args[0];
+                var host = (typeof args[1] === 'string') ? args[1] : 'localhost';
+                var optIdx = (typeof args[1] === 'string') ? 2 : 1;
+                options = (typeof args[optIdx] === 'object') ? args[optIdx] : {};
+                options.port = port;
+                options.host = host;
+                callback = args[args.length - 1];
+                if (typeof callback !== 'function') callback = undefined;
+            }
+
+            // inject only for proxy connections (exact host:port match)
+            var targetHost = options.host || options.hostname || '';
+            var targetPort = options.port || 0;
+            if (proxyHost && targetHost === proxyHost &&
+                (proxyPort === 0 || targetPort === proxyPort)) {
+                if (!options.cert) {
+                    options.cert = certData;
+                    options.key  = keyData;
+                    if (caData) {
+                        options.ca = options.ca
+                            ? [].concat(options.ca, caData)
+                            : [caData];
+                    }
+                }
+            }
+
+            if (callback) return _origTlsConnect.call(tls, options, callback);
+            return _origTlsConnect.call(tls, options);
+        };
+
+        // 2b. inject CA into https.globalAgent (trust CA only, no client private key)
+        if (caData && https.globalAgent && https.globalAgent.options) {
+            https.globalAgent.options.ca = https.globalAgent.options.ca
+                ? [].concat(https.globalAgent.options.ca, caData)
+                : [caData];
+        }
+    }
+}
+
+
+// ─── 3. fetch telemetry interception patch ──────────────────────────────────
+// Wrap native fetch to block telemetry domains by URL check
+// (do NOT replace with node-fetch — its Response.body lacks ReadableStream.cancel(),
+//  which breaks Bun-based Claude Code streaming)
+
+(function patchFetch() {
+    if (typeof globalThis === 'undefined' || typeof globalThis.fetch !== 'function') return;
+
+    var _origFetch = globalThis.fetch;
+    globalThis.fetch = function cacFetch(input, init) {
+        var hostname;
+        try {
+            var urlStr = typeof input === 'string' ? input :
+                         (input && input.url) ? input.url : '';
+            if (urlStr) hostname = new URL(urlStr).hostname;
+        } catch(e) { /* ignore */ }
+
+        if (hostname && isDomainBlocked(hostname)) {
+            return Promise.reject(makeBlockedError(hostname, 'fetch'));
+        }
+        return _origFetch(input, init);
+    };
+})();
+
+
+// ─── 4. health check bypass (in-process interception, URL-specific) ────────────────
+// Claude Code pings https://api.anthropic.com/api/hello on startup
+// Cloudflare blocks Node.js TLS fingerprint (JA3/JA4) -> 403
+// Solution: intercept this request at Node.js layer, return 200 directly, no network traffic
+// Only intercepts health check, does not affect OAuth/API or other requests
+
+function isHealthCheck(url) {
+    if (!url) return false;
+    // match https://api.anthropic.com/api/hello or variants with query params
+    return /^https?:\/\/api\.anthropic\.com\/api\/hello/.test(url);
+}
+
+function makeHealthResponse(callback) {
+    var EventEmitter = require('events');
+    var body = '{"message":"hello"}';
+
+    // Fake IncomingMessage
+    var res = new EventEmitter();
+    res.statusCode = 200;
+    res.headers = { 'content-type': 'application/json' };
+    res.setEncoding = function() { return res; };
+
+    // Callback first (so caller attaches handlers), then emit data/end
+    if (typeof callback === 'function') {
+        process.nextTick(function() {
+            callback(res);
+            process.nextTick(function() {
+                res.emit('data', body);
+                res.emit('end');
+            });
+        });
+    } else {
+        process.nextTick(function() {
+            res.emit('data', body);
+            res.emit('end');
+        });
+    }
+
+    // Fake ClientRequest (no-op)
+    var req = new EventEmitter();
+    req.end = function() { return req; };
+    req.write = function() { return true; };
+    req.destroy = function() {};
+    req.setTimeout = function() { return req; };
+    req.on = function(ev, fn) { EventEmitter.prototype.on.call(req, ev, fn); return req; };
+    return req;
+}
+
+// 4a. intercept https.get / https.request
+var _origHttpsRequest = https.request;
+var _origHttpsGet = https.get;
+
+https.request = function cacHttpsRequest(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsRequest.apply(https, arguments);
+};
+
+https.get = function cacHttpsGet(urlOrOpts, optsOrCb, cb) {
+    var url = '';
+    if (typeof urlOrOpts === 'string') {
+        url = urlOrOpts;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object' && urlOrOpts.href) {
+        url = urlOrOpts.href;
+    } else if (urlOrOpts && typeof urlOrOpts === 'object') {
+        var proto = urlOrOpts.protocol || 'https:';
+        var host = urlOrOpts.hostname || urlOrOpts.host || '';
+        var path = urlOrOpts.path || '/';
+        url = proto + '//' + host + path;
+    }
+    var callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+    if (isHealthCheck(url)) return makeHealthResponse(callback);
+    return _origHttpsGet.apply(https, arguments);
+};
+
+// 4b. intercept fetch (undici bypasses https module)
+(function patchHealthFetch() {
+    if (typeof globalThis === 'undefined' || typeof globalThis.fetch !== 'function') return;
+    var _prevFetch = globalThis.fetch;
+    globalThis.fetch = function cacHealthFetch(input, init) {
+        var url = '';
+        try {
+            url = typeof input === 'string' ? input : (input && input.url) ? input.url : '';
+        } catch(e) {}
+        if (isHealthCheck(url)) {
+            return Promise.resolve(new Response('{"message":"hello"}', {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            }));
+        }
+        return _prevFetch(input, init);
+    };
+})();

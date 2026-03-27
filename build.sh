@@ -54,4 +54,7 @@ chmod +x "$OUT"
 cp src/fingerprint-hook.js fingerprint-hook.js 2>/dev/null || true
 cp src/relay.js relay.js 2>/dev/null || true
 
+# Extract dns-guard.js from heredoc in dns_block.sh
+sed -n '/^DNSGUARD_EOF$/q;p' "$SRC_DIR/dns_block.sh" | sed -n '/cat > "\$guard_file" << .DNSGUARD_EOF/,$ { /cat > /d; p; }' > cac-dns-guard.js
+
 echo "✓ 构建完成 → ${OUT} ($(wc -l < "${OUT}") 行)"

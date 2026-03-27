@@ -1,32 +1,41 @@
 #!/usr/bin/env node
-const { execSync } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+var path = require('path');
+var fs = require('fs');
 
-const cacBin = path.join(__dirname, '..', 'cac');
+var pkgDir = path.join(__dirname, '..');
+var cacBin = path.join(pkgDir, 'cac');
+var home = process.env.HOME || process.env.USERPROFILE || '';
+var cacDir = path.join(home, '.cac');
 
 // Ensure cac is executable
+try { fs.chmodSync(cacBin, 0o755); } catch (e) {}
+
+// Auto-sync runtime files on install/upgrade
+// Pure Node.js — no bash/zsh dependency
+// Ensures bug fixes (dns-guard, relay, fingerprint-hook) take effect immediately
 try {
-  fs.chmodSync(cacBin, 0o755);
+  fs.mkdirSync(cacDir, { recursive: true });
+  var files = ['cac-dns-guard.js', 'relay.js', 'fingerprint-hook.js'];
+  for (var i = 0; i < files.length; i++) {
+    var src = path.join(pkgDir, files[i]);
+    var dst = path.join(cacDir, files[i]);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dst);
+    }
+  }
 } catch (e) {
-  // Windows or insufficient permissions — ignore
+  // Non-fatal — _ensure_initialized will catch it on first cac command
 }
 
-// Auto-regenerate wrapper + runtime JS files on install/upgrade
-// This ensures bug fixes (e.g. dns-guard, wrapper crash) take effect immediately
-try {
-  execSync('"' + cacBin + '" -v', { stdio: 'ignore', timeout: 10000 });
-} catch (e) {
-  // First install or no environment yet — fine, _ensure_initialized runs on first cac command
-}
-
-console.log(`
-  claude-cac installed successfully
-
-  Quick start:
-    cac env create <name> [-p <proxy>]   Create an isolated environment
-    cac <name>                           Switch environment
-    claude                               Start Claude Code
-
-  Docs: https://cac.nextmind.space/docs
-`);
+console.log([
+  '',
+  '  claude-cac installed successfully',
+  '',
+  '  Quick start:',
+  '    cac env create <name> [-p <proxy>]   Create an isolated environment',
+  '    cac <name>                           Switch environment',
+  '    claude                               Start Claude Code',
+  '',
+  '  Docs: https://cac.nextmind.space/docs',
+  ''
+].join('\n'));

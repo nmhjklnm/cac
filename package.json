@@ -9,6 +9,7 @@
     "cac",
     "cac.ps1",
     "cac.cmd",
+    "cac-dns-guard.js",
     "fingerprint-hook.js",
     "relay.js",
     "scripts/postinstall.js",
