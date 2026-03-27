@@ -110,11 +110,14 @@ _write_env_settings() {
 SETTINGS_EOF
 }
 
-# write CLAUDE.md to env .claude dir
+# write CAC Meta Prompt to env .claude/CLAUDE.md
+# Usage: _write_env_claude_md <config_dir> <env_name> [--append]
 _write_env_claude_md() {
     local config_dir="$1"
     local env_name="$2"
-    cat > "$config_dir/CLAUDE.md" << CLAUDEMD_EOF
+    local _meta
+    _meta=$(cat << CLAUDEMD_EOF
+
 # cac managed environment
 
 This Claude Code instance is managed by **cac** (Claude Code Cloak).
@@ -128,6 +131,12 @@ Useful commands:
 - \`cac env check\` — verify current environment health
 - \`cac <name>\` — switch to another environment
 CLAUDEMD_EOF
+    )
+    if [[ "${3:-}" == "--append" ]]; then
+        printf '\n%s\n' "$_meta" >> "$config_dir/CLAUDE.md"
+    else
+        printf '%s\n' "$_meta" > "$config_dir/CLAUDE.md"
+    fi
 }
 
 _write_wrapper() {

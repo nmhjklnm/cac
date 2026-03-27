@@ -138,6 +138,7 @@ _env_cmd_create() {
                     ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
                 else
                     cp "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+                    _write_env_claude_md "$env_dir/.claude" "$name" --append
                 fi
             fi
             if [[ -f "$src_claude_dir/settings.json" ]]; then
