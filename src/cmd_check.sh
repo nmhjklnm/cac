@@ -130,7 +130,7 @@ cmd_check() {
 
     # ── concurrent sessions ──
     local _claude_count
-    _claude_count=$(pgrep -f "claude" 2>/dev/null | wc -l | tr -d '[:space:]')
+    _claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]')
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
     if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
         echo "    $(_yellow "⚠") sessions  $_claude_count running (threshold: $_max_sessions)"
