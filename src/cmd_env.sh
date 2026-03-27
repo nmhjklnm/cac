@@ -2,13 +2,16 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local"
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
+            --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2 ;;
+            --clone)     clone_source="${2:-host}"; shift; [[ "${1:-}" != -* ]] && [[ -n "${1:-}" ]] && shift || true ;;
+            --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
@@ -52,7 +55,32 @@ _env_cmd_create() {
             local detected_tz
             detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
-            echo "$(_cyan "$tz")"
+            # Auto-adapt LANG based on exit IP country
+            local country_code
+            country_code=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('countryCode',''))" 2>/dev/null || true)
+            if [[ -n "$country_code" ]]; then
+                case "$country_code" in
+                    US) lang="en_US.UTF-8" ;;
+                    GB) lang="en_GB.UTF-8" ;;
+                    AU) lang="en_AU.UTF-8" ;;
+                    CA) lang="en_CA.UTF-8" ;;
+                    SG) lang="en_SG.UTF-8" ;;
+                    HK) lang="zh_HK.UTF-8" ;;
+                    TW) lang="zh_TW.UTF-8" ;;
+                    JP) lang="ja_JP.UTF-8" ;;
+                    KR) lang="ko_KR.UTF-8" ;;
+                    DE) lang="de_DE.UTF-8" ;;
+                    FR) lang="fr_FR.UTF-8" ;;
+                    ES) lang="es_ES.UTF-8" ;;
+                    IT) lang="it_IT.UTF-8" ;;
+                    PT|BR) lang="pt_BR.UTF-8" ;;
+                    RU) lang="ru_RU.UTF-8" ;;
+                    NL) lang="nl_NL.UTF-8" ;;
+                    IN) lang="en_IN.UTF-8" ;;
+                    *)  lang="en_US.UTF-8" ;;
+                esac
+            fi
+            echo "$(_cyan "$tz") $(_dim "($country_code)")"
         else
             echo "$(_dim "default $tz")"
         fi
@@ -70,12 +98,79 @@ _env_cmd_create() {
     echo "$lang"              > "$env_dir/lang"
     [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
     echo "$env_type"          > "$env_dir/type"
+    date -u +"%Y-%m-%dT%H:%M:%S.000Z" > "$env_dir/first_start_time"
+
+    # Telemetry mode: conservative (default) or aggressive
+    [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode conservative)
+    echo "$telemetry_mode" > "$env_dir/telemetry_mode"
+
     mkdir -p "$env_dir/.claude"
 
     # Initialize settings.json, statusline, and CLAUDE.md
     _write_env_settings "$env_dir/.claude"
     _write_statusline_script "$env_dir/.claude"
     _write_env_claude_md "$env_dir/.claude" "$name"
+
+    # Clone config from source
+    if [[ -n "$clone_source" ]]; then
+        local src_claude_dir
+        if [[ "$clone_source" == "host" ]]; then
+            src_claude_dir="$HOME/.claude"
+        elif [[ -d "$ENVS_DIR/$clone_source/.claude" ]]; then
+            src_claude_dir="$ENVS_DIR/$clone_source/.claude"
+        else
+            echo "  $(_yellow "⚠") clone source '$clone_source' not found, skipping" >&2
+            clone_source=""
+        fi
+
+        if [[ -n "$clone_source" ]] && [[ -d "$src_claude_dir" ]]; then
+            local clone_dirs="commands hooks skills plugins"
+            for d in $clone_dirs; do
+                if [[ -d "$src_claude_dir/$d" ]]; then
+                    rm -rf "$env_dir/.claude/$d"
+                    if [[ "$clone_link" == "true" ]]; then
+                        ln -sf "$src_claude_dir/$d" "$env_dir/.claude/$d"
+                    else
+                        cp -r "$src_claude_dir/$d" "$env_dir/.claude/$d"
+                    fi
+                fi
+            done
+            # CLAUDE.md: symlink by default, copy with --no-link
+            if [[ -f "$src_claude_dir/CLAUDE.md" ]]; then
+                if [[ "$clone_link" == "true" ]]; then
+                    ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+                else
+                    cp "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+                fi
+            fi
+            # settings.json: merge (keep env overrides, inherit rest from source)
+            if [[ -f "$src_claude_dir/settings.json" ]]; then
+                # Save current env settings as override
+                cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
+                # Merge: source as base, env override on top
+                python3 - "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json" << 'MERGE_EOF'
+import json, sys
+base = json.load(open(sys.argv[1]))
+override = json.load(open(sys.argv[2]))
+# Deep merge: override wins
+def merge(b, o):
+    r = dict(b)
+    for k, v in o.items():
+        if k in r and isinstance(r[k], dict) and isinstance(v, dict):
+            r[k] = merge(r[k], v)
+        else:
+            r[k] = v
+    return r
+result = merge(base, override)
+with open(sys.argv[3], 'w') as f:
+    json.dump(result, f, indent=2, ensure_ascii=False)
+MERGE_EOF
+            fi
+            local link_mode="symlinked"
+            [[ "$clone_link" != "true" ]] && link_mode="copied"
+            echo "  $(_green "+") cloned   from ${src_claude_dir/#$HOME/~} ($link_mode)"
+        fi
+    fi
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
@@ -288,7 +383,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode]"
             echo "    $(_green "set") [name] proxy <url>           Set proxy"
             echo "    $(_green "set") [name] proxy --remove        Remove proxy"
             echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"

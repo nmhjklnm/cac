@@ -11,10 +11,21 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.3.3"
+CAC_VERSION="1.4.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
+
+# Read a value from ~/.cac/settings.json
+# Usage: _cac_setting "key" "default"
+_cac_setting() {
+    local key="$1" default="${2:-}"
+    local settings="$CAC_DIR/settings.json"
+    [[ -f "$settings" ]] || { echo "$default"; return; }
+    local val
+    val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
+    echo "${val:-$default}"
+}
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
 _red()    { printf '\033[31m%s\033[0m' "$*"; }
@@ -385,15 +396,26 @@ _update_claude_json_user_id() {
     local claude_json="$config_dir/.claude.json"
     [[ -f "$claude_json" ]] || claude_json="$HOME/.claude.json"
     [[ -f "$claude_json" ]] || return 0
-    python3 - "$claude_json" "$user_id" << 'PYEOF'
+
+    # Find firstStartTime from current env
+    local fst=""
+    local current_env; current_env=$(_current_env)
+    if [[ -n "$current_env" ]] && [[ -f "$ENVS_DIR/$current_env/first_start_time" ]]; then
+        fst=$(tr -d '[:space:]' < "$ENVS_DIR/$current_env/first_start_time")
+    fi
+
+    python3 - "$claude_json" "$user_id" "$fst" << 'PYEOF'
 import json, sys, uuid
-fpath, uid = sys.argv[1], sys.argv[2]
+fpath, uid, fst = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
 with open(fpath) as f:
     d = json.load(f)
 d['userID'] = uid
 d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
 d.pop('numStartups', None)
-d.pop('firstStartTime', None)
+if fst:
+    d['firstStartTime'] = fst
+else:
+    d.pop('firstStartTime', None)
 d.pop('cachedGrowthBookFeatures', None)
 d.pop('cachedStatsigGates', None)
 with open(fpath, 'w') as f:
@@ -1062,6 +1084,7 @@ _write_wrapper() {
     cat > "$CAC_DIR/bin/claude" << 'WRAPPER_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# CAC_WRAPPER_VER=__CAC_VER__
 
 CAC_DIR="$HOME/.cac"
 ENVS_DIR="$CAC_DIR/envs"
@@ -1086,6 +1109,30 @@ if [[ -d "$_env_dir/.claude" ]]; then
     export CLAUDE_CONFIG_DIR="$_env_dir/.claude"
     # ensure settings.json exists, prevent Claude Code fallback to ~/.claude/settings.json
     [[ -f "$_env_dir/.claude/settings.json" ]] || echo '{}' > "$_env_dir/.claude/settings.json"
+    # Merge settings: if override exists, re-merge from source on each start
+    if [[ -f "$_env_dir/.claude/settings.override.json" ]]; then
+        _src_settings=""
+        # Find source settings (check if CLAUDE.md is a symlink to determine source)
+        if [[ -L "$_env_dir/.claude/CLAUDE.md" ]]; then
+            _src_settings="$(dirname "$(readlink "$_env_dir/.claude/CLAUDE.md")")/settings.json"
+        elif [[ -f "$HOME/.claude/settings.json" ]]; then
+            _src_settings="$HOME/.claude/settings.json"
+        fi
+        if [[ -n "$_src_settings" ]] && [[ -f "$_src_settings" ]] && command -v python3 &>/dev/null; then
+            python3 -c "
+import json,sys
+b=json.load(open(sys.argv[1]))
+o=json.load(open(sys.argv[2]))
+def m(b,o):
+    r=dict(b)
+    for k,v in o.items():
+        if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
+        else: r[k]=v
+    return r
+json.dump(m(b,o),open(sys.argv[3],'w'),indent=2)
+" "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
+        fi
+    fi
 fi
 
 # Proxy — optional: only if proxy file exists and is non-empty
@@ -1128,24 +1175,33 @@ fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── multi-layer telemetry protection ──
-# Layer 1: Claude Code native toggle
-export CLAUDE_CODE_ENABLE_TELEMETRY=
-# Layer 2: universal telemetry opt-out (https://consoledonottrack.com)
-export DO_NOT_TRACK=1
-# Layer 3: OpenTelemetry SDK fully disabled
-export OTEL_SDK_DISABLED=true
-export OTEL_TRACES_EXPORTER=none
-export OTEL_METRICS_EXPORTER=none
-export OTEL_LOGS_EXPORTER=none
-# Layer 4: empty Sentry DSN, block error reporting
-export SENTRY_DSN=
-# Layer 5: Claude Code specific toggles
-export DISABLE_ERROR_REPORTING=1
-export DISABLE_BUG_COMMAND=1
+_telemetry_mode="conservative"
+[[ -f "$_env_dir/telemetry_mode" ]] && _telemetry_mode=$(tr -d '[:space:]' < "$_env_dir/telemetry_mode")
+
+# Conservative mode: disable non-essential traffic only (looks like corporate bandwidth saving)
+# Aggressive mode: full 12-layer telemetry kill (maximum privacy, potentially detectable)
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-# Layer 6: other known telemetry flags
-export TELEMETRY_DISABLED=1
-export DISABLE_TELEMETRY=1
+export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+
+if [[ "$_telemetry_mode" == "aggressive" ]]; then
+    # Layer 1: Claude Code native toggle
+    export CLAUDE_CODE_ENABLE_TELEMETRY=
+    # Layer 2: universal telemetry opt-out (https://consoledonottrack.com)
+    export DO_NOT_TRACK=1
+    # Layer 3: OpenTelemetry SDK fully disabled
+    export OTEL_SDK_DISABLED=true
+    export OTEL_TRACES_EXPORTER=none
+    export OTEL_METRICS_EXPORTER=none
+    export OTEL_LOGS_EXPORTER=none
+    # Layer 4: empty Sentry DSN, block error reporting
+    export SENTRY_DSN=
+    # Layer 5: Claude Code specific toggles
+    export DISABLE_ERROR_REPORTING=1
+    export DISABLE_BUG_COMMAND=1
+    # Layer 6: other known telemetry flags
+    export TELEMETRY_DISABLED=1
+    export DISABLE_TELEMETRY=1
+fi
 
 # with proxy: force OAuth (clear API config to prevent leaks)
 # without proxy: preserve user's API Key / Base URL
@@ -1268,11 +1324,28 @@ _cleanup_all() {
 }
 
 trap _cleanup_all EXIT INT TERM
+
+# ── Concurrent session check ──
+_max_sessions=10
+if [[ -f "$CAC_DIR/settings.json" ]] && command -v python3 &>/dev/null; then
+    _ms=$(python3 -c "import json; print(json.load(open('$CAC_DIR/settings.json')).get('max_sessions',''))" 2>/dev/null || true)
+    [[ -n "$_ms" ]] && _max_sessions="$_ms"
+fi
+_claude_count=$(pgrep -cf "claude" 2>/dev/null || true)
+[[ -z "$_claude_count" ]] && _claude_count=0
+if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
+    echo "[cac] warning: $_claude_count claude sessions running (threshold: $_max_sessions)" >&2
+    echo "[cac] hint: concurrent sessions on the same device may trigger detection" >&2
+    echo "[cac] hint: adjust threshold with: echo '{\"max_sessions\": 20}' > ~/.cac/settings.json" >&2
+fi
+
 "$_real" "$@"
 _ec=$?
 _cleanup_all
 exit "$_ec"
 WRAPPER_EOF
+    local _tmp="$CAC_DIR/bin/claude.tmp"
+    sed "s/__CAC_VER__/$CAC_VERSION/" "$CAC_DIR/bin/claude" > "$_tmp" && mv "$_tmp" "$CAC_DIR/bin/claude"
     chmod +x "$CAC_DIR/bin/claude"
 }
 
@@ -1413,8 +1486,15 @@ _ensure_initialized() {
     # Keep .latest pointing to highest installed version
     _update_latest 2>/dev/null || true
 
-    # Rest only needed on first init
-    [[ -f "$CAC_DIR/bin/claude" ]] && return 0
+    # Re-generate wrapper on version upgrade
+    if [[ -f "$CAC_DIR/bin/claude" ]]; then
+        local _wrapper_ver
+        _wrapper_ver=$(grep 'CAC_WRAPPER_VER=' "$CAC_DIR/bin/claude" 2>/dev/null | sed 's/.*CAC_WRAPPER_VER=//' | tr -d '[:space:]' || true)
+        if [[ "$_wrapper_ver" != "$CAC_VERSION" ]]; then
+            _write_wrapper
+        fi
+        return 0
+    fi
 
     # Find real claude (system-installed or managed)
     local real_claude
@@ -1488,13 +1568,16 @@ cmd_setup() {
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local"
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
+            --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2 ;;
+            --clone)     clone_source="${2:-host}"; shift; [[ "${1:-}" != -* ]] && [[ -n "${1:-}" ]] && shift || true ;;
+            --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
         esac
@@ -1538,7 +1621,32 @@ _env_cmd_create() {
             local detected_tz
             detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
-            echo "$(_cyan "$tz")"
+            # Auto-adapt LANG based on exit IP country
+            local country_code
+            country_code=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('countryCode',''))" 2>/dev/null || true)
+            if [[ -n "$country_code" ]]; then
+                case "$country_code" in
+                    US) lang="en_US.UTF-8" ;;
+                    GB) lang="en_GB.UTF-8" ;;
+                    AU) lang="en_AU.UTF-8" ;;
+                    CA) lang="en_CA.UTF-8" ;;
+                    SG) lang="en_SG.UTF-8" ;;
+                    HK) lang="zh_HK.UTF-8" ;;
+                    TW) lang="zh_TW.UTF-8" ;;
+                    JP) lang="ja_JP.UTF-8" ;;
+                    KR) lang="ko_KR.UTF-8" ;;
+                    DE) lang="de_DE.UTF-8" ;;
+                    FR) lang="fr_FR.UTF-8" ;;
+                    ES) lang="es_ES.UTF-8" ;;
+                    IT) lang="it_IT.UTF-8" ;;
+                    PT|BR) lang="pt_BR.UTF-8" ;;
+                    RU) lang="ru_RU.UTF-8" ;;
+                    NL) lang="nl_NL.UTF-8" ;;
+                    IN) lang="en_IN.UTF-8" ;;
+                    *)  lang="en_US.UTF-8" ;;
+                esac
+            fi
+            echo "$(_cyan "$tz") $(_dim "($country_code)")"
         else
             echo "$(_dim "default $tz")"
         fi
@@ -1556,12 +1664,79 @@ _env_cmd_create() {
     echo "$lang"              > "$env_dir/lang"
     [[ -n "$claude_ver" ]]    && echo "$claude_ver" > "$env_dir/version"
     echo "$env_type"          > "$env_dir/type"
+    date -u +"%Y-%m-%dT%H:%M:%S.000Z" > "$env_dir/first_start_time"
+
+    # Telemetry mode: conservative (default) or aggressive
+    [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode conservative)
+    echo "$telemetry_mode" > "$env_dir/telemetry_mode"
+
     mkdir -p "$env_dir/.claude"
 
     # Initialize settings.json, statusline, and CLAUDE.md
     _write_env_settings "$env_dir/.claude"
     _write_statusline_script "$env_dir/.claude"
     _write_env_claude_md "$env_dir/.claude" "$name"
+
+    # Clone config from source
+    if [[ -n "$clone_source" ]]; then
+        local src_claude_dir
+        if [[ "$clone_source" == "host" ]]; then
+            src_claude_dir="$HOME/.claude"
+        elif [[ -d "$ENVS_DIR/$clone_source/.claude" ]]; then
+            src_claude_dir="$ENVS_DIR/$clone_source/.claude"
+        else
+            echo "  $(_yellow "⚠") clone source '$clone_source' not found, skipping" >&2
+            clone_source=""
+        fi
+
+        if [[ -n "$clone_source" ]] && [[ -d "$src_claude_dir" ]]; then
+            local clone_dirs="commands hooks skills plugins"
+            for d in $clone_dirs; do
+                if [[ -d "$src_claude_dir/$d" ]]; then
+                    rm -rf "$env_dir/.claude/$d"
+                    if [[ "$clone_link" == "true" ]]; then
+                        ln -sf "$src_claude_dir/$d" "$env_dir/.claude/$d"
+                    else
+                        cp -r "$src_claude_dir/$d" "$env_dir/.claude/$d"
+                    fi
+                fi
+            done
+            # CLAUDE.md: symlink by default, copy with --no-link
+            if [[ -f "$src_claude_dir/CLAUDE.md" ]]; then
+                if [[ "$clone_link" == "true" ]]; then
+                    ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+                else
+                    cp "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
+                fi
+            fi
+            # settings.json: merge (keep env overrides, inherit rest from source)
+            if [[ -f "$src_claude_dir/settings.json" ]]; then
+                # Save current env settings as override
+                cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
+                # Merge: source as base, env override on top
+                python3 - "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json" << 'MERGE_EOF'
+import json, sys
+base = json.load(open(sys.argv[1]))
+override = json.load(open(sys.argv[2]))
+# Deep merge: override wins
+def merge(b, o):
+    r = dict(b)
+    for k, v in o.items():
+        if k in r and isinstance(r[k], dict) and isinstance(v, dict):
+            r[k] = merge(r[k], v)
+        else:
+            r[k] = v
+    return r
+result = merge(base, override)
+with open(sys.argv[3], 'w') as f:
+    json.dump(result, f, indent=2, ensure_ascii=False)
+MERGE_EOF
+            fi
+            local link_mode="symlinked"
+            [[ "$clone_link" != "true" ]] && link_mode="copied"
+            echo "  $(_green "+") cloned   from ${src_claude_dir/#$HOME/~} ($link_mode)"
+        fi
+    fi
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
@@ -1774,7 +1949,7 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode]"
             echo "    $(_green "set") [name] proxy <url>           Set proxy"
             echo "    $(_green "set") [name] proxy --remove        Remove proxy"
             echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
@@ -2062,22 +2237,87 @@ cmd_check() {
     local wrapper_file="$CAC_DIR/bin/claude"
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
-    local env_vars=(
-        "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
-        "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
-        "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
-    )
-    local env_ok=0 env_total=${#env_vars[@]}
-    for var in "${env_vars[@]}"; do
-        [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
-    done
-
-    if [[ "$env_ok" -eq "$env_total" ]]; then
-        echo "    $(_green "✓") telemetry  ${env_ok}/${env_total} blocked"
+    local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
+    if [[ "$telemetry_mode" == "aggressive" ]]; then
+        local env_vars=(
+            "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
+            "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
+            "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
+        )
+        local env_ok=0 env_total=${#env_vars[@]}
+        for var in "${env_vars[@]}"; do
+            [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
+        done
+        if [[ "$env_ok" -eq "$env_total" ]]; then
+            echo "    $(_green "✓") telemetry  aggressive ${env_ok}/${env_total} blocked"
+        else
+            echo "    $(_red "✗") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            problems+=("telemetry shield ${env_ok}/${env_total}")
+        fi
     else
-        echo "    $(_red "✗") telemetry  ${env_ok}/${env_total} blocked"
-        problems+=("telemetry shield ${env_ok}/${env_total}")
+        # Conservative: just check the 2 essential vars
+        local cons_ok=0
+        [[ "$wrapper_content" == *"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"* ]] && (( cons_ok++ )) || true
+        [[ "$wrapper_content" == *"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"* ]] && (( cons_ok++ )) || true
+        if [[ "$cons_ok" -eq 2 ]]; then
+            echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
+        else
+            echo "    $(_red "✗") telemetry  conservative ($cons_ok/2)"
+            problems+=("telemetry shield incomplete")
+        fi
+    fi
+
+    # ── fingerprint hook runtime verification ──
+    if [[ -f "$CAC_DIR/fingerprint-hook.js" ]] && [[ -f "$env_dir/hostname" ]]; then
+        local expected_hn; expected_hn=$(_read "$env_dir/hostname")
+        local actual_hn
+        actual_hn=$(NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js" CAC_HOSTNAME="$expected_hn" \
+            node -e "process.stdout.write(require('os').hostname())" 2>/dev/null || true)
+        if [[ "$actual_hn" == "$expected_hn" ]]; then
+            echo "    $(_green "✓") fingerprint spoofed ($(_dim "$expected_hn"))"
+        else
+            echo "    $(_red "✗") fingerprint NOT spoofed (got: $actual_hn)"
+            problems+=("fingerprint hook not working")
+        fi
+    fi
+
+    # ── IPv6 leak detection ──
+    local os; os=$(_detect_os)
+    local ipv6_leak=false
+    if [[ "$os" == "macos" ]]; then
+        local ipv6_addrs
+        ipv6_addrs=$(ifconfig 2>/dev/null | grep -c "inet6 [2-3]" || true)
+        [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
+    elif [[ "$os" == "linux" ]]; then
+        local ipv6_addrs
+        ipv6_addrs=$(ip -6 addr show scope global 2>/dev/null | grep -c "inet6" || true)
+        [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
+    fi
+    if [[ "$ipv6_leak" == "true" ]]; then
+        echo "    $(_yellow "⚠") IPv6      global address detected (potential leak)"
+    else
+        echo "    $(_green "✓") IPv6      no global address"
+    fi
+
+    # ── residual telemetry files ──
+    if [[ -d "$HOME/.claude/telemetry" ]]; then
+        local tel_files
+        tel_files=$(find "$HOME/.claude/telemetry" -type f 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$tel_files" -gt 0 ]]; then
+            echo "    $(_yellow "⚠") residual  $tel_files telemetry files in ~/.claude/telemetry/"
+            echo "              $(_dim "hint: rm -rf ~/.claude/telemetry/")"
+        fi
+    fi
+
+    # ── concurrent sessions ──
+    local _claude_count
+    _claude_count=$(pgrep -cf "claude" 2>/dev/null || true)
+    [[ -z "$_claude_count" ]] && _claude_count=0
+    local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
+    if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
+        echo "    $(_yellow "⚠") sessions  $_claude_count running (threshold: $_max_sessions)"
     fi
 
     # ── network check (slow — streaming output) ──
@@ -2100,13 +2340,23 @@ cmd_check() {
             # Overwrite the "detecting..." line
             if [[ -n "$proxy_ip" ]]; then
                 printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")\033[K\n"
+                # TZ vs exit IP consistency check
+                local env_tz; env_tz=$(_read "$env_dir/tz" "")
+                if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
+                    local ip_tz
+                    ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
+                        python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+                    if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
+                        echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
+                        problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")
+                    fi
+                fi
             else
                 printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")\033[K\n"
             fi
 
             # TUN conflict detection
             if [[ -n "$proxy_ip" ]]; then
-            local os; os=$(_detect_os)
             local has_conflict=false
             local tun_procs="clash|mihomo|sing-box|surge|shadowrocket|v2ray|xray|hysteria|tuic|nekoray"
             local running
@@ -2175,8 +2425,20 @@ cmd_check() {
         echo "    $(_dim "LANG")       $(_read "$env_dir/lang" "—")"
         echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
-        echo "  $(_bold "Telemetry") ${env_ok}/${env_total}"
-        for var in "${env_vars[@]}"; do
+        echo "  $(_bold "Telemetry") ($telemetry_mode mode)"
+        local verbose_vars=(
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
+        )
+        if [[ "$telemetry_mode" == "aggressive" ]]; then
+            verbose_vars=(
+                "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
+                "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
+                "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
+                "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
+            )
+        fi
+        for var in "${verbose_vars[@]}"; do
             if [[ "$wrapper_content" == *"$var"* ]]; then
                 printf "    $(_green "✓") %s\n" "$var"
             else

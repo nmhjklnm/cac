@@ -135,6 +135,7 @@ _write_wrapper() {
     cat > "$CAC_DIR/bin/claude" << 'WRAPPER_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# CAC_WRAPPER_VER=__CAC_VER__
 
 CAC_DIR="$HOME/.cac"
 ENVS_DIR="$CAC_DIR/envs"
@@ -159,6 +160,30 @@ if [[ -d "$_env_dir/.claude" ]]; then
     export CLAUDE_CONFIG_DIR="$_env_dir/.claude"
     # ensure settings.json exists, prevent Claude Code fallback to ~/.claude/settings.json
     [[ -f "$_env_dir/.claude/settings.json" ]] || echo '{}' > "$_env_dir/.claude/settings.json"
+    # Merge settings: if override exists, re-merge from source on each start
+    if [[ -f "$_env_dir/.claude/settings.override.json" ]]; then
+        _src_settings=""
+        # Find source settings (check if CLAUDE.md is a symlink to determine source)
+        if [[ -L "$_env_dir/.claude/CLAUDE.md" ]]; then
+            _src_settings="$(dirname "$(readlink "$_env_dir/.claude/CLAUDE.md")")/settings.json"
+        elif [[ -f "$HOME/.claude/settings.json" ]]; then
+            _src_settings="$HOME/.claude/settings.json"
+        fi
+        if [[ -n "$_src_settings" ]] && [[ -f "$_src_settings" ]] && command -v python3 &>/dev/null; then
+            python3 -c "
+import json,sys
+b=json.load(open(sys.argv[1]))
+o=json.load(open(sys.argv[2]))
+def m(b,o):
+    r=dict(b)
+    for k,v in o.items():
+        if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
+        else: r[k]=v
+    return r
+json.dump(m(b,o),open(sys.argv[3],'w'),indent=2)
+" "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
+        fi
+    fi
 fi
 
 # Proxy — optional: only if proxy file exists and is non-empty
@@ -201,24 +226,33 @@ fi
 export PATH="$CAC_DIR/shim-bin:$PATH"
 
 # ── multi-layer telemetry protection ──
-# Layer 1: Claude Code native toggle
-export CLAUDE_CODE_ENABLE_TELEMETRY=
-# Layer 2: universal telemetry opt-out (https://consoledonottrack.com)
-export DO_NOT_TRACK=1
-# Layer 3: OpenTelemetry SDK fully disabled
-export OTEL_SDK_DISABLED=true
-export OTEL_TRACES_EXPORTER=none
-export OTEL_METRICS_EXPORTER=none
-export OTEL_LOGS_EXPORTER=none
-# Layer 4: empty Sentry DSN, block error reporting
-export SENTRY_DSN=
-# Layer 5: Claude Code specific toggles
-export DISABLE_ERROR_REPORTING=1
-export DISABLE_BUG_COMMAND=1
+_telemetry_mode="conservative"
+[[ -f "$_env_dir/telemetry_mode" ]] && _telemetry_mode=$(tr -d '[:space:]' < "$_env_dir/telemetry_mode")
+
+# Conservative mode: disable non-essential traffic only (looks like corporate bandwidth saving)
+# Aggressive mode: full 12-layer telemetry kill (maximum privacy, potentially detectable)
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-# Layer 6: other known telemetry flags
-export TELEMETRY_DISABLED=1
-export DISABLE_TELEMETRY=1
+export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+
+if [[ "$_telemetry_mode" == "aggressive" ]]; then
+    # Layer 1: Claude Code native toggle
+    export CLAUDE_CODE_ENABLE_TELEMETRY=
+    # Layer 2: universal telemetry opt-out (https://consoledonottrack.com)
+    export DO_NOT_TRACK=1
+    # Layer 3: OpenTelemetry SDK fully disabled
+    export OTEL_SDK_DISABLED=true
+    export OTEL_TRACES_EXPORTER=none
+    export OTEL_METRICS_EXPORTER=none
+    export OTEL_LOGS_EXPORTER=none
+    # Layer 4: empty Sentry DSN, block error reporting
+    export SENTRY_DSN=
+    # Layer 5: Claude Code specific toggles
+    export DISABLE_ERROR_REPORTING=1
+    export DISABLE_BUG_COMMAND=1
+    # Layer 6: other known telemetry flags
+    export TELEMETRY_DISABLED=1
+    export DISABLE_TELEMETRY=1
+fi
 
 # with proxy: force OAuth (clear API config to prevent leaks)
 # without proxy: preserve user's API Key / Base URL
@@ -341,11 +375,28 @@ _cleanup_all() {
 }
 
 trap _cleanup_all EXIT INT TERM
+
+# ── Concurrent session check ──
+_max_sessions=10
+if [[ -f "$CAC_DIR/settings.json" ]] && command -v python3 &>/dev/null; then
+    _ms=$(python3 -c "import json; print(json.load(open('$CAC_DIR/settings.json')).get('max_sessions',''))" 2>/dev/null || true)
+    [[ -n "$_ms" ]] && _max_sessions="$_ms"
+fi
+_claude_count=$(pgrep -cf "claude" 2>/dev/null || true)
+[[ -z "$_claude_count" ]] && _claude_count=0
+if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
+    echo "[cac] warning: $_claude_count claude sessions running (threshold: $_max_sessions)" >&2
+    echo "[cac] hint: concurrent sessions on the same device may trigger detection" >&2
+    echo "[cac] hint: adjust threshold with: echo '{\"max_sessions\": 20}' > ~/.cac/settings.json" >&2
+fi
+
 "$_real" "$@"
 _ec=$?
 _cleanup_all
 exit "$_ec"
 WRAPPER_EOF
+    local _tmp="$CAC_DIR/bin/claude.tmp"
+    sed "s/__CAC_VER__/$CAC_VERSION/" "$CAC_DIR/bin/claude" > "$_tmp" && mv "$_tmp" "$CAC_DIR/bin/claude"
     chmod +x "$CAC_DIR/bin/claude"
 }
 

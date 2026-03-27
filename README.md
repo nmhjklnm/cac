@@ -36,7 +36,8 @@
 
 - **版本管理** — 安装、切换、回滚 Claude Code 版本
 - **环境隔离** — 每个环境独立的 `.claude` 配置 + 身份 + 代理
-- **隐私保护** — 设备指纹伪装 + 遥测阻断 + mTLS
+- **隐私保护** — 设备指纹伪装 + 遥测分级（`conservative`/`aggressive`）+ mTLS
+- **配置继承** — `--clone` 从宿主或其他环境继承配置，`~/.cac/settings.json` 全局偏好
 - **零配置** — 无需 setup，首次使用自动初始化
 
 ### 安装
@@ -108,7 +109,7 @@ cac ls                                  # = cac env ls
 | `cac claude ls` | 列出已安装版本 |
 | `cac claude pin <ver>` | 当前环境绑定版本 |
 | **环境管理** | |
-| `cac env create <name> [-p proxy] [-c ver]` | 创建环境（自动激活） |
+| `cac env create <name> [-p proxy] [-c ver] [--clone]` | 创建环境（自动激活，`--clone` 继承配置） |
 | `cac env ls` | 列出环境 |
 | `cac env rm <name>` | 删除环境 |
 | `cac env set [name] <key> <value>` | 修改环境（proxy / version） |
@@ -137,7 +138,7 @@ socks5://u:p@host:port    指定协议
 | 硬件 UUID 隔离 | macOS `ioreg` / Linux `machine-id` / Windows `wmic`+`reg` shim |
 | 主机名 / MAC 隔离 | Shell shim + Node.js `os.hostname()` / `os.networkInterfaces()` hook |
 | Node.js 指纹钩子 | `fingerprint-hook.js` 通过 `NODE_OPTIONS --require` 注入 |
-| 遥测阻断 | DNS guard + 12 层环境变量 + fetch 拦截 + HOSTALIASES |
+| 遥测阻断 | DNS guard + 环境变量 + fetch 拦截 + 分级模式（`conservative`/`aggressive`） |
 | 健康检查 bypass | 进程内 Node.js 拦截（无需 /etc/hosts 或 root） |
 | mTLS 客户端证书 | 自签 CA + 每环境独立客户端证书 |
 | `.claude` 配置隔离 | 每个环境独立的 `CLAUDE_CONFIG_DIR` |
@@ -218,7 +219,8 @@ cac docker port 6287 # 端口转发
 
 - **Version management** — install, switch, rollback Claude Code versions
 - **Environment isolation** — independent `.claude` config + identity + proxy per environment
-- **Privacy protection** — device fingerprint spoofing + telemetry blocking + mTLS
+- **Privacy protection** — device fingerprint spoofing + telemetry modes (`conservative`/`aggressive`) + mTLS
+- **Config inheritance** — `--clone` inherits config from host or other envs, `~/.cac/settings.json` for global preferences
 - **Zero config** — no setup needed, auto-initializes on first use
 
 ### Install
@@ -290,7 +292,7 @@ Each environment is fully isolated:
 | `cac claude ls` | List installed versions |
 | `cac claude pin <ver>` | Pin current env to version |
 | **Environment management** | |
-| `cac env create <name> [-p proxy] [-c ver]` | Create environment (auto-activates) |
+| `cac env create <name> [-p proxy] [-c ver] [--clone]` | Create environment (auto-activates, `--clone` inherits config) |
 | `cac env ls` | List environments |
 | `cac env rm <name>` | Remove environment |
 | `cac env set [name] <key> <value>` | Modify environment (proxy / version) |
@@ -311,7 +313,7 @@ Each environment is fully isolated:
 | Hardware UUID isolation | macOS `ioreg` / Linux `machine-id` / Windows `wmic`+`reg` shim |
 | Hostname / MAC isolation | Shell shim + Node.js `os.hostname()` / `os.networkInterfaces()` hook |
 | Node.js fingerprint hook | `fingerprint-hook.js` via `NODE_OPTIONS --require` |
-| Telemetry blocking | DNS guard + 12 env vars + fetch interception + HOSTALIASES |
+| Telemetry blocking | DNS guard + env vars + fetch interception + modes (`conservative`/`aggressive`) |
 | Health check bypass | In-process Node.js interception (no `/etc/hosts`, no root) |
 | mTLS client certificates | Self-signed CA + per-profile client certs |
 | `.claude` config isolation | Per-environment `CLAUDE_CONFIG_DIR` |

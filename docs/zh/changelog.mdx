@@ -5,6 +5,28 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.4.0
+<sub>2026-03-26</sub>
+
+**安全加固** — [Issue #42](https://github.com/nmhjklnm/cac/issues/42)
+
+基于社区对 Claude Code 2.1.83 的逆向分析（[@mo-xiaoxi](https://github.com/mo-xiaoxi) 从 Bun 打包的 Mach-O 二进制中提取 11.3MB JS bundle）：
+
+- **遥测分级**：`conservative`（新默认）vs `aggressive` — conservative 仅禁用非必要流量，看起来像正常企业用户；aggressive 是之前的 12 层全量封杀
+- **屏蔽 `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`**：预防性阻止未来 feature flag 激活增强遥测
+- **持久化 `firstStartTime`**：每个环境维持一致的"设备年龄"，避免触发"永远的新设备"检测模式
+- **并发会话警告**：claude 进程数超过阈值（默认 10，可通过 `~/.cac/settings.json` 配置）时发出警告
+- **`LANG` 自动适配**：根据出口 IP 国家代码自动检测 locale（如 JP→`ja_JP.UTF-8`、SG→`en_SG.UTF-8`）
+- **`cac env check` 增强**：指纹 hook 运行时验证、IPv6 泄漏检测、TZ/IP 一致性检查、残留遥测文件检测
+
+**配置继承** — [Issue #43](https://github.com/nmhjklnm/cac/issues/43)
+
+- **`--clone` 参数**：`cac env create work --clone` 从 `~/.claude/` 继承配置（commands、hooks、skills、plugins 通过符号链接；CLAUDE.md 通过符号链接；settings.json 分层合并）
+- **`--clone <env>`**：从其他 cac 环境克隆而非宿主环境
+- **`--no-link`**：复制文件而非符号链接，用于独立定制
+- **`settings.override.json`**：环境特有设置叠加在共享基础配置之上，每次启动时自动合并
+- **`~/.cac/settings.json`**：新的 cac 级配置文件，存储全局偏好（max_sessions、telemetry_mode）
+
 ## v1.3.3
 <sub>2026-03-27</sub>
 

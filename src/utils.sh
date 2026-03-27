@@ -1,10 +1,21 @@
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.3.3"
+CAC_VERSION="1.4.0"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
+
+# Read a value from ~/.cac/settings.json
+# Usage: _cac_setting "key" "default"
+_cac_setting() {
+    local key="$1" default="${2:-}"
+    local settings="$CAC_DIR/settings.json"
+    [[ -f "$settings" ]] || { echo "$default"; return; }
+    local val
+    val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
+    echo "${val:-$default}"
+}
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
 _red()    { printf '\033[31m%s\033[0m' "$*"; }
@@ -375,15 +386,26 @@ _update_claude_json_user_id() {
     local claude_json="$config_dir/.claude.json"
     [[ -f "$claude_json" ]] || claude_json="$HOME/.claude.json"
     [[ -f "$claude_json" ]] || return 0
-    python3 - "$claude_json" "$user_id" << 'PYEOF'
+
+    # Find firstStartTime from current env
+    local fst=""
+    local current_env; current_env=$(_current_env)
+    if [[ -n "$current_env" ]] && [[ -f "$ENVS_DIR/$current_env/first_start_time" ]]; then
+        fst=$(tr -d '[:space:]' < "$ENVS_DIR/$current_env/first_start_time")
+    fi
+
+    python3 - "$claude_json" "$user_id" "$fst" << 'PYEOF'
 import json, sys, uuid
-fpath, uid = sys.argv[1], sys.argv[2]
+fpath, uid, fst = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
 with open(fpath) as f:
     d = json.load(f)
 d['userID'] = uid
 d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
 d.pop('numStartups', None)
-d.pop('firstStartTime', None)
+if fst:
+    d['firstStartTime'] = fst
+else:
+    d.pop('firstStartTime', None)
 d.pop('cachedGrowthBookFeatures', None)
 d.pop('cachedStatsigGates', None)
 with open(fpath, 'w') as f:

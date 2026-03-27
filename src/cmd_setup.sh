@@ -31,8 +31,15 @@ _ensure_initialized() {
     # Keep .latest pointing to highest installed version
     _update_latest 2>/dev/null || true
 
-    # Rest only needed on first init
-    [[ -f "$CAC_DIR/bin/claude" ]] && return 0
+    # Re-generate wrapper on version upgrade
+    if [[ -f "$CAC_DIR/bin/claude" ]]; then
+        local _wrapper_ver
+        _wrapper_ver=$(grep 'CAC_WRAPPER_VER=' "$CAC_DIR/bin/claude" 2>/dev/null | sed 's/.*CAC_WRAPPER_VER=//' | tr -d '[:space:]' || true)
+        if [[ "$_wrapper_ver" != "$CAC_VERSION" ]]; then
+            _write_wrapper
+        fi
+        return 0
+    fi
 
     # Find real claude (system-installed or managed)
     local real_claude
