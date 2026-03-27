@@ -202,7 +202,7 @@ cac docker port 6287 # 端口转发
 - **首次登录**：启动 `claude` 后，输入 `/login` 完成 OAuth 授权
 - **安全验证**：随时运行 `cac env check` 确认隐私保护状态，也可以 `which claude` 确认使用的是 cac 托管的 claude
 - **自动安全检查**：每次启动 Claude Code 会话时，cac 会快速检查环境。如有异常会终止会话，不会发送任何数据
-- **网络稳定性**：流量严格走代理——代理断开时流量完全停止，不会回退直连
+- **网络稳定性**：流量严格走代理——代理断开时流量完全停止，不会回退直连。内置心跳检测和自动恢复，断线后无需手动重启
 - **IPv6**：建议系统级关闭，防止真实地址泄露
 
 ---
@@ -377,7 +377,7 @@ Proxy formats: `ip:port:user:pass` (SOCKS5), `ss://...`, `vmess://...`, `vless:/
 - **First login**: Run `claude`, then type `/login`. Health check is automatically bypassed.
 - **Verify your setup**: Run `cac env check` anytime. Use `which claude` to confirm you're using the cac-managed wrapper.
 - **Automatic safety checks**: Every new Claude Code session runs a quick cac check. If anything is wrong, the session is terminated before any data is sent.
-- **Network resilience**: Traffic is strictly routed through your proxy. If the proxy drops, traffic stops entirely — no fallback to direct connection.
+- **Network resilience**: Traffic is strictly routed through your proxy. If the proxy drops, traffic stops entirely — no fallback to direct connection. Built-in heartbeat detection and auto-recovery — no manual restart needed after disconnections.
 - **IPv6**: Recommend disabling system-wide to prevent real address exposure.
 
 ---
