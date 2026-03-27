@@ -6,13 +6,30 @@ description: Release history and notable changes
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
 ## v1.4.0
-<sub>2026-03-26</sub>
+<sub>2026-03-27</sub>
+
+**Critical fix: `body.cancel is not a function`** — [PR #44](https://github.com/nmhjklnm/cac/pull/44)
+
+- dns-guard.js replaced native `fetch` with `node-fetch`, whose `Response.body` is a Node.js Readable stream lacking `ReadableStream.cancel()`. Claude Code runs on Bun and expects native fetch — every streaming response broke. Now uses URL-checking wrapper instead of replacing the entire fetch implementation.
+
+**Relay hardening** — [PR #44](https://github.com/nmhjklnm/cac/pull/44)
+
+- **Heartbeat**: Upstream proxy connectivity check every 30s, logs state changes (unreachable → recovered)
+- **Crash recovery**: `uncaughtException`/`unhandledRejection` handlers prevent single-connection errors from killing the relay process
+- **Watchdog**: Wrapper monitors relay process every 10s, auto-restarts on crash — no more manual session restart
+- **Streaming timeout**: Idle timeout 120s → 30min, reset on data activity — long streaming responses no longer killed
+- **Fail-closed**: Dead relay → HTTPS_PROXY points to dead port → connection refused (no IP leak)
+
+**Cleanup** — [PR #44](https://github.com/nmhjklnm/cac/pull/44)
+
+- Removed deprecated `cac setup` command (auto-bootstrap via `_ensure_initialized` remains)
+- Updated stale error messages referencing `cac setup`
 
 **Security hardening** — [Issue #42](https://github.com/nmhjklnm/cac/issues/42)
 
 Based on community reverse engineering of Claude Code 2.1.83 (11.3MB JS bundle analysis by [@mo-xiaoxi](https://github.com/mo-xiaoxi)):
 
-- **Telemetry modes**: `conservative` (new default) vs `aggressive` — conservative only blocks non-essential traffic, looking like a normal corporate user; aggressive is the previous 12-layer full block
+- **Telemetry modes**: Three modes — `off` (no intervention, for pure API Key users) / `conservative` (new default, blocks non-essential traffic) / `aggressive` (12-layer full block)
 - **Block `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA`**: Preemptively prevent enhanced telemetry activation via future feature flags
 - **Persist `firstStartTime` per environment**: Each environment maintains consistent "device age", avoiding the "perpetual new device" detection pattern
 - **Concurrent session warning**: Warns when claude process count exceeds threshold (default 10, configurable via `~/.cac/settings.json`)
@@ -24,8 +41,16 @@ Based on community reverse engineering of Claude Code 2.1.83 (11.3MB JS bundle a
 - **`--clone` flag**: `cac env create work --clone` inherits config from `~/.claude/` (commands, hooks, skills, plugins via symlink; CLAUDE.md via symlink; settings.json via layered merge)
 - **`--clone <env>`**: Clone from another cac environment instead of host
 - **`--no-link`**: Copy files instead of symlink for independent customization
+- **CAC Meta Prompt**: `--clone` with symlink skips CLAUDE.md injection; `--clone --no-link` appends cac instructions to copied CLAUDE.md
 - **`settings.override.json`**: Environment-specific settings layered on top of shared base config, auto-merged on each startup
 - **`~/.cac/settings.json`**: New cac-level config file for global preferences (max_sessions, telemetry_mode)
+
+**Infrastructure**
+
+- **Wrapper auto-upgrade**: `CAC_WRAPPER_VER` stamp detects version mismatch → wrapper auto-regenerated on next command
+- **Wrapper optimizations**: Settings merge skipped when inputs unchanged (mtime check), session count reads file instead of spawning python3
+- **macOS fixes**: `pgrep -cf` unavailable on macOS → `pgrep -f | wc -l`; `pgrep -x` for exact claude binary match (avoids MCP subprocess false positives)
+- **`--clone` arg parsing fix**: `--no-link` no longer consumed as clone source name
 
 ## v1.3.3
 <sub>2026-03-27</sub>
