@@ -14,7 +14,10 @@ _cac_setting() {
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
     val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
-    echo "${val:-$default}"
+    val="${val:-$default}"
+    # Sync hot-path keys as plain files (avoids python3 spawn in wrapper)
+    [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
+    echo "$val"
 }
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }

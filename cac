@@ -24,7 +24,10 @@ _cac_setting() {
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
     val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
-    echo "${val:-$default}"
+    val="${val:-$default}"
+    # Sync hot-path keys as plain files (avoids python3 spawn in wrapper)
+    [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
+    echo "$val"
 }
 _bold()   { printf '\033[1m%s\033[0m' "$*"; }
 _green()  { printf '\033[32m%s\033[0m' "$*"; }
@@ -1109,17 +1112,19 @@ if [[ -d "$_env_dir/.claude" ]]; then
     export CLAUDE_CONFIG_DIR="$_env_dir/.claude"
     # ensure settings.json exists, prevent Claude Code fallback to ~/.claude/settings.json
     [[ -f "$_env_dir/.claude/settings.json" ]] || echo '{}' > "$_env_dir/.claude/settings.json"
-    # Merge settings: if override exists, re-merge from source on each start
+    # Merge settings: if override exists, re-merge from source on each start (skip if unchanged)
     if [[ -f "$_env_dir/.claude/settings.override.json" ]]; then
         _src_settings=""
-        # Find source settings (check if CLAUDE.md is a symlink to determine source)
-        if [[ -L "$_env_dir/.claude/CLAUDE.md" ]]; then
-            _src_settings="$(dirname "$(readlink "$_env_dir/.claude/CLAUDE.md")")/settings.json"
+        if [[ -f "$_env_dir/clone_source" ]]; then
+            _src_settings="$(tr -d '[:space:]' < "$_env_dir/clone_source")/settings.json"
         elif [[ -f "$HOME/.claude/settings.json" ]]; then
             _src_settings="$HOME/.claude/settings.json"
         fi
-        if [[ -n "$_src_settings" ]] && [[ -f "$_src_settings" ]] && command -v python3 &>/dev/null; then
-            python3 -c "
+        if [[ -n "$_src_settings" ]] && [[ -f "$_src_settings" ]]; then
+            # Skip merge if settings.json is newer than both inputs
+            if [[ "$_src_settings" -nt "$_env_dir/.claude/settings.json" ]] || \
+               [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
+                python3 -c "
 import json,sys
 b=json.load(open(sys.argv[1]))
 o=json.load(open(sys.argv[2]))
@@ -1129,8 +1134,9 @@ def m(b,o):
         if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
         else: r[k]=v
     return r
-json.dump(m(b,o),open(sys.argv[3],'w'),indent=2)
+json.dump(m(b,o),open(sys.argv[3],'w'),indent=2,ensure_ascii=False)
 " "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
+            fi
         fi
     fi
 fi
@@ -1184,6 +1190,11 @@ _telemetry_mode="conservative"
 if [[ "$_telemetry_mode" != "off" ]]; then
     export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
     export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+fi
+
+if [[ "$_telemetry_mode" != "off" ]] && [[ "$_telemetry_mode" != "conservative" ]] && [[ "$_telemetry_mode" != "aggressive" ]]; then
+    echo "[cac] warning: unknown telemetry mode '$_telemetry_mode', using conservative" >&2
+    _telemetry_mode="conservative"
 fi
 
 if [[ "$_telemetry_mode" == "aggressive" ]]; then
@@ -1330,10 +1341,7 @@ trap _cleanup_all EXIT INT TERM
 
 # ── Concurrent session check ──
 _max_sessions=10
-if [[ -f "$CAC_DIR/settings.json" ]] && command -v python3 &>/dev/null; then
-    _ms=$(python3 -c "import json; print(json.load(open('$CAC_DIR/settings.json')).get('max_sessions',''))" 2>/dev/null || true)
-    [[ -n "$_ms" ]] && _max_sessions="$_ms"
-fi
+[[ -f "$CAC_DIR/max_sessions" ]] && _ms=$(tr -d '[:space:]' < "$CAC_DIR/max_sessions") && [[ -n "$_ms" ]] && _max_sessions="$_ms"
 _claude_count=$(pgrep -cf "claude" 2>/dev/null || true)
 [[ -z "$_claude_count" ]] && _claude_count=0
 if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
@@ -1622,12 +1630,9 @@ _env_cmd_create() {
         local ip_info
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
-            local detected_tz
-            detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+            local detected_tz country_code
+            read -r detected_tz country_code < <(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''), d.get('countryCode',''))" 2>/dev/null || echo "")
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
-            # Auto-adapt LANG based on exit IP country
-            local country_code
-            country_code=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('countryCode',''))" 2>/dev/null || true)
             if [[ -n "$country_code" ]]; then
                 case "$country_code" in
                     US) lang="en_US.UTF-8" ;;
@@ -1705,7 +1710,6 @@ _env_cmd_create() {
                     fi
                 fi
             done
-            # CLAUDE.md: symlink by default, copy with --no-link
             if [[ -f "$src_claude_dir/CLAUDE.md" ]]; then
                 if [[ "$clone_link" == "true" ]]; then
                     ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
@@ -1713,11 +1717,8 @@ _env_cmd_create() {
                     cp "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
                 fi
             fi
-            # settings.json: merge (keep env overrides, inherit rest from source)
             if [[ -f "$src_claude_dir/settings.json" ]]; then
-                # Save current env settings as override
                 cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
-                # Merge: source as base, env override on top
                 python3 - "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json" << 'MERGE_EOF'
 import json, sys
 base = json.load(open(sys.argv[1]))
@@ -1736,6 +1737,8 @@ with open(sys.argv[3], 'w') as f:
     json.dump(result, f, indent=2, ensure_ascii=False)
 MERGE_EOF
             fi
+            # Store clone source for wrapper merge-on-startup
+            echo "$src_claude_dir" > "$env_dir/clone_source"
             local link_mode="symlinked"
             [[ "$clone_link" != "true" ]] && link_mode="copied"
             echo "  $(_green "+") cloned   from ${src_claude_dir/#$HOME/~} ($link_mode)"
@@ -2242,18 +2245,19 @@ cmd_check() {
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
     local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
+    local _tel_conservative_vars=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+    local _tel_aggressive_vars=(
+        "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
+        "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
+        "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
+        "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
+    )
     if [[ "$telemetry_mode" == "off" ]]; then
         echo "    $(_dim "○") telemetry  off (no protection)"
     elif [[ "$telemetry_mode" == "aggressive" ]]; then
-        local env_vars=(
-            "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
-            "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
-            "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
-            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
-        )
-        local env_ok=0 env_total=${#env_vars[@]}
-        for var in "${env_vars[@]}"; do
+        local env_ok=0 env_total=${#_tel_aggressive_vars[@]}
+        for var in "${_tel_aggressive_vars[@]}"; do
             [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
         done
         if [[ "$env_ok" -eq "$env_total" ]]; then
@@ -2263,10 +2267,10 @@ cmd_check() {
             problems+=("telemetry shield ${env_ok}/${env_total}")
         fi
     else
-        # Conservative: just check the 2 essential vars
         local cons_ok=0
-        [[ "$wrapper_content" == *"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"* ]] && (( cons_ok++ )) || true
-        [[ "$wrapper_content" == *"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"* ]] && (( cons_ok++ )) || true
+        for var in "${_tel_conservative_vars[@]}"; do
+            [[ "$wrapper_content" == *"$var"* ]] && (( cons_ok++ )) || true
+        done
         if [[ "$cons_ok" -eq 2 ]]; then
             echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
         else
@@ -2435,19 +2439,9 @@ cmd_check() {
         if [[ "$telemetry_mode" == "off" ]]; then
             echo "    $(_dim "  no telemetry protection active")"
         fi
-        local verbose_vars=(
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
-        )
-        if [[ "$telemetry_mode" == "aggressive" ]]; then
-            verbose_vars=(
-                "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
-                "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
-                "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
-                "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
-            )
-        fi
-        for var in "${verbose_vars[@]}"; do
+        local _vvars=("${_tel_conservative_vars[@]}")
+        [[ "$telemetry_mode" == "aggressive" ]] && _vvars=("${_tel_aggressive_vars[@]}")
+        for var in "${_vvars[@]}"; do
             if [[ "$wrapper_content" == *"$var"* ]]; then
                 printf "    $(_green "✓") %s\n" "$var"
             else

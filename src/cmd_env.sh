@@ -53,12 +53,9 @@ _env_cmd_create() {
         local ip_info
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
-            local detected_tz
-            detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+            local detected_tz country_code
+            read -r detected_tz country_code < <(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''), d.get('countryCode',''))" 2>/dev/null || echo "")
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
-            # Auto-adapt LANG based on exit IP country
-            local country_code
-            country_code=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('countryCode',''))" 2>/dev/null || true)
             if [[ -n "$country_code" ]]; then
                 case "$country_code" in
                     US) lang="en_US.UTF-8" ;;
@@ -136,7 +133,6 @@ _env_cmd_create() {
                     fi
                 fi
             done
-            # CLAUDE.md: symlink by default, copy with --no-link
             if [[ -f "$src_claude_dir/CLAUDE.md" ]]; then
                 if [[ "$clone_link" == "true" ]]; then
                     ln -sf "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
@@ -144,11 +140,8 @@ _env_cmd_create() {
                     cp "$src_claude_dir/CLAUDE.md" "$env_dir/.claude/CLAUDE.md"
                 fi
             fi
-            # settings.json: merge (keep env overrides, inherit rest from source)
             if [[ -f "$src_claude_dir/settings.json" ]]; then
-                # Save current env settings as override
                 cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
-                # Merge: source as base, env override on top
                 python3 - "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json" << 'MERGE_EOF'
 import json, sys
 base = json.load(open(sys.argv[1]))
@@ -167,6 +160,8 @@ with open(sys.argv[3], 'w') as f:
     json.dump(result, f, indent=2, ensure_ascii=False)
 MERGE_EOF
             fi
+            # Store clone source for wrapper merge-on-startup
+            echo "$src_claude_dir" > "$env_dir/clone_source"
             local link_mode="symlinked"
             [[ "$clone_link" != "true" ]] && link_mode="copied"
             echo "  $(_green "+") cloned   from ${src_claude_dir/#$HOME/~} ($link_mode)"

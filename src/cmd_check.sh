@@ -52,18 +52,19 @@ cmd_check() {
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
     local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
+    local _tel_conservative_vars=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA")
+    local _tel_aggressive_vars=(
+        "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
+        "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
+        "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
+        "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
+    )
     if [[ "$telemetry_mode" == "off" ]]; then
         echo "    $(_dim "○") telemetry  off (no protection)"
     elif [[ "$telemetry_mode" == "aggressive" ]]; then
-        local env_vars=(
-            "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
-            "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
-            "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
-            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
-        )
-        local env_ok=0 env_total=${#env_vars[@]}
-        for var in "${env_vars[@]}"; do
+        local env_ok=0 env_total=${#_tel_aggressive_vars[@]}
+        for var in "${_tel_aggressive_vars[@]}"; do
             [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
         done
         if [[ "$env_ok" -eq "$env_total" ]]; then
@@ -73,10 +74,10 @@ cmd_check() {
             problems+=("telemetry shield ${env_ok}/${env_total}")
         fi
     else
-        # Conservative: just check the 2 essential vars
         local cons_ok=0
-        [[ "$wrapper_content" == *"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"* ]] && (( cons_ok++ )) || true
-        [[ "$wrapper_content" == *"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"* ]] && (( cons_ok++ )) || true
+        for var in "${_tel_conservative_vars[@]}"; do
+            [[ "$wrapper_content" == *"$var"* ]] && (( cons_ok++ )) || true
+        done
         if [[ "$cons_ok" -eq 2 ]]; then
             echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
         else
@@ -245,19 +246,9 @@ cmd_check() {
         if [[ "$telemetry_mode" == "off" ]]; then
             echo "    $(_dim "  no telemetry protection active")"
         fi
-        local verbose_vars=(
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
-        )
-        if [[ "$telemetry_mode" == "aggressive" ]]; then
-            verbose_vars=(
-                "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
-                "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
-                "SENTRY_DSN" "DISABLE_ERROR_REPORTING" "DISABLE_BUG_COMMAND"
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "TELEMETRY_DISABLED" "DISABLE_TELEMETRY"
-                "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
-            )
-        fi
-        for var in "${verbose_vars[@]}"; do
+        local _vvars=("${_tel_conservative_vars[@]}")
+        [[ "$telemetry_mode" == "aggressive" ]] && _vvars=("${_tel_aggressive_vars[@]}")
+        for var in "${_vvars[@]}"; do
             if [[ "$wrapper_content" == *"$var"* ]]; then
                 printf "    $(_green "✓") %s\n" "$var"
             else
