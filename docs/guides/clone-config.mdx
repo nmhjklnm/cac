@@ -1,0 +1,130 @@
+---
+title: "Config inheritance with --clone"
+description: "Reuse your Claude Code settings, skills, hooks, and plugins across cac environments."
+icon: "clone"
+---
+
+You've spent time customizing Claude Code — CLAUDE.md, custom skills, hooks, plugins, MCP servers. When you create a new cac environment, you don't want to set all that up again.
+
+`--clone` lets you inherit your existing config into a new isolated environment, while keeping device identity and telemetry protection fully separate.
+
+## Quick start
+
+```bash
+# Clone from your host ~/.claude/ config
+cac env create work --clone
+
+# Start using it
+cac work
+claude
+```
+
+That's it. Your new `work` environment now has all your customizations, with its own isolated identity.
+
+## What gets inherited
+
+| Resource | Default (symlink) | With `--no-link` (copy) |
+|:---|:---|:---|
+| `commands/` | Symlinked — changes reflect everywhere | Copied — independent |
+| `hooks/` | Symlinked | Copied |
+| `skills/` | Symlinked | Copied |
+| `plugins/` | Symlinked | Copied |
+| `CLAUDE.md` | Symlinked | Copied + cac instructions appended |
+| `settings.json` | Layered merge via `settings.override.json` | Layered merge via `settings.override.json` |
+
+What's **not** inherited (always generated fresh per environment):
+- Device identity (UUID, hostname, MAC address, machine ID)
+- Credentials and sessions
+- Telemetry protection settings
+- mTLS certificates
+
+## Symlink vs copy
+
+### Symlink (default)
+
+```bash
+cac env create work --clone
+```
+
+Shared resources are **symlinked** to the source. When you edit a skill or hook in `~/.claude/`, every cloned environment sees the change immediately.
+
+Best for: keeping all environments in sync with one set of customizations.
+
+### Copy (`--no-link`)
+
+```bash
+cac env create work --clone --no-link
+```
+
+Resources are **copied** into the new environment. Changes to the source don't affect it, and vice versa.
+
+Best for: creating an environment you want to customize independently.
+
+<Tip>
+With `--no-link`, cac automatically appends its own instructions to the copied `CLAUDE.md` (the "CAC Meta Prompt"). With symlink mode this is skipped, since modifying a symlinked file would affect the source.
+</Tip>
+
+## Clone from another environment
+
+You can clone from any existing cac environment instead of `~/.claude/`:
+
+```bash
+# Clone from the "work" environment
+cac env create work2 --clone work
+```
+
+This is useful when you've customized one cac environment and want to branch off from it.
+
+## Settings merge
+
+Settings use a layered merge system regardless of symlink/copy mode:
+
+1. **Base**: `settings.json` from the source (host `~/.claude/` or another env)
+2. **Override**: `settings.override.json` in the environment (cac-specific overrides)
+3. **Result**: Merged `settings.json` written to the environment's `.claude/` directory
+
+The merge happens on each `claude` startup, so if you update your base settings, all cloned environments pick up the changes automatically.
+
+```
+~/.claude/settings.json          (your shared base)
+    +
+env/.claude/settings.override.json  (cac overrides: permissions, statusline, etc.)
+    =
+env/.claude/settings.json        (merged result, auto-generated)
+```
+
+## Typical workflow
+
+```bash
+# 1. Set up your host ~/.claude/ config how you like it
+#    (skills, hooks, plugins, CLAUDE.md, settings)
+
+# 2. Create isolated environments that inherit everything
+cac env create client-a --clone -p proxy-a:1080:user:pass
+cac env create client-b --clone -p proxy-b:1080:user:pass
+
+# 3. Each environment has:
+#    - Your full config (skills, hooks, etc.)
+#    - Its own identity (different fingerprint)
+#    - Its own proxy (different exit IP)
+#    - Its own telemetry protection
+
+# 4. Switch between them
+cac client-a
+claude    # uses your config, proxy-a identity
+
+cac client-b
+claude    # same config, different identity + proxy
+```
+
+## Combining with other flags
+
+All `create` flags work together:
+
+```bash
+# Clone + proxy + pinned version + aggressive telemetry
+cac env create secure --clone -p socks5://proxy:1080 -c 2.1.85 --telemetry aggressive
+
+# Clone from another env + independent copies
+cac env create fork --clone work --no-link
+```

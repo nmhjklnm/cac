@@ -1,0 +1,130 @@
+---
+title: "用 --clone 继承配置"
+description: "在 cac 环境间复用 Claude Code 的 settings、skills、hooks 和 plugins。"
+icon: "clone"
+---
+
+你花了不少时间定制 Claude Code —— CLAUDE.md、自定义 skills、hooks、plugins、MCP 服务器。创建新的 cac 环境时，不想从头再来一遍。
+
+`--clone` 让你把现有配置继承到新的隔离环境中，同时设备身份和遥测保护完全独立。
+
+## 快速开始
+
+```bash
+# 从宿主 ~/.claude/ 克隆配置
+cac env create work --clone
+
+# 开始使用
+cac work
+claude
+```
+
+就这么简单。新的 `work` 环境拥有你所有的自定义配置，同时有自己独立的身份。
+
+## 继承了什么
+
+| 资源 | 默认（符号链接） | 使用 `--no-link`（复制） |
+|:---|:---|:---|
+| `commands/` | 符号链接 — 修改会同步到所有环境 | 复制 — 独立 |
+| `hooks/` | 符号链接 | 复制 |
+| `skills/` | 符号链接 | 复制 |
+| `plugins/` | 符号链接 | 复制 |
+| `CLAUDE.md` | 符号链接 | 复制 + 自动追加 cac 指令 |
+| `settings.json` | 通过 `settings.override.json` 分层合并 | 通过 `settings.override.json` 分层合并 |
+
+以下内容**不会**被继承（每个环境独立生成）：
+- 设备身份（UUID、hostname、MAC 地址、machine ID）
+- 登录凭据和会话
+- 遥测保护设置
+- mTLS 证书
+
+## 符号链接 vs 复制
+
+### 符号链接（默认）
+
+```bash
+cac env create work --clone
+```
+
+共享资源通过**符号链接**指向源目录。在 `~/.claude/` 中修改 skill 或 hook 后，所有克隆环境立即看到变化。
+
+适合：让所有环境保持同步，共用一套自定义配置。
+
+### 复制（`--no-link`）
+
+```bash
+cac env create work --clone --no-link
+```
+
+资源被**复制**到新环境。修改源不影响它，反之亦然。
+
+适合：创建一个需要独立定制的环境。
+
+<Tip>
+使用 `--no-link` 时，cac 会自动在复制的 `CLAUDE.md` 末尾追加 cac 专属指令（"CAC Meta Prompt"）。符号链接模式下会跳过这步，因为修改符号链接的文件会影响源文件。
+</Tip>
+
+## 从其他环境克隆
+
+可以从任意现有 cac 环境克隆，而不只是 `~/.claude/`：
+
+```bash
+# 从 "work" 环境克隆
+cac env create work2 --clone work
+```
+
+适合在已有定制的环境基础上分支出新环境。
+
+## Settings 合并机制
+
+无论符号链接还是复制模式，settings 都使用分层合并：
+
+1. **基础层**：来自源的 `settings.json`（宿主 `~/.claude/` 或其他环境）
+2. **覆盖层**：环境中的 `settings.override.json`（cac 特有覆盖项）
+3. **结果**：合并后的 `settings.json` 写入环境的 `.claude/` 目录
+
+合并在每次 `claude` 启动时自动执行，所以更新基础 settings 后，所有克隆环境会自动同步。
+
+```
+~/.claude/settings.json             (共享基础配置)
+    +
+env/.claude/settings.override.json  (cac 覆盖：权限、statusline 等)
+    =
+env/.claude/settings.json           (合并结果，自动生成)
+```
+
+## 典型工作流
+
+```bash
+# 1. 按喜好配置宿主 ~/.claude/
+#    （skills、hooks、plugins、CLAUDE.md、settings）
+
+# 2. 创建继承所有配置的隔离环境
+cac env create client-a --clone -p proxy-a:1080:user:pass
+cac env create client-b --clone -p proxy-b:1080:user:pass
+
+# 3. 每个环境拥有：
+#    - 你的完整配置（skills、hooks 等）
+#    - 独立身份（不同指纹）
+#    - 独立代理（不同出口 IP）
+#    - 独立遥测保护
+
+# 4. 自由切换
+cac client-a
+claude    # 用你的配置 + client-a 的身份和代理
+
+cac client-b
+claude    # 同样的配置，不同的身份和代理
+```
+
+## 与其他参数组合
+
+所有 `create` 参数可以自由组合：
+
+```bash
+# 克隆 + 代理 + 指定版本 + aggressive 遥测
+cac env create secure --clone -p socks5://proxy:1080 -c 2.1.85 --telemetry aggressive
+
+# 从其他环境克隆 + 独立复制
+cac env create fork --clone work --no-link
+```

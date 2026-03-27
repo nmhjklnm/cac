@@ -84,6 +84,7 @@
             {
               "group": "Guides",
               "pages": [
+                "guides/clone-config",
                 "guides/proxy-setup",
                 "guides/api-key-users",
                 "guides/docker-mode",
@@ -130,6 +131,7 @@
             {
               "group": "指南",
               "pages": [
+                "zh/guides/clone-config",
                 "zh/guides/proxy-setup",
                 "zh/guides/api-key-users",
                 "zh/guides/docker-mode",
