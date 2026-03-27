@@ -1,0 +1,21 @@
+# cac-server 配置示例 — DNS 直连模式
+# 同时启用正向代理（:8080）和反向代理（:443）
+
+listen: ":8080"
+admin_listen: ":8081"
+admin_pass: "changeme"
+db_path: "/etc/cac-server/cac-server.db"
+
+# DNS 直连模式反向代理
+reverse:
+  enabled: true
+  listen: ":443"
+  # 由 cac 客户端生成的服务器证书（SAN: api.anthropic.com）
+  cert_file: "/etc/cac-server/server_cert.pem"
+  key_file: "/etc/cac-server/server_key.pem"
+  # cac CA 证书（用于验证客户端 mTLS 证书）
+  ca_file: "/etc/cac-server/ca_cert.pem"
+  # 推荐开启：要求客户端提供 mTLS 证书
+  require_mtls: true
+  # 可选：通过上游代理连接 Anthropic API（留空则直连）
+  # backend: "socks5://user:pass@upstream:1080"

@@ -6,7 +6,7 @@ cmd_help() {
     echo
 
     echo "  $(_bold "Environment")"
-    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver]"
+    echo "    $(_green "cac env create") <name> [-p proxy] [-d server] [-t token] [-c ver]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
@@ -32,6 +32,7 @@ cmd_help() {
 
     echo "  $(_dim "Examples:")"
     echo "    $(_dim "cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81")"
+    echo "    $(_dim "cac env create dns1 -d 64.186.230.163 -t mytoken")"
     echo "    $(_dim "cac env create personal")"
     echo "    $(_dim "cac work")"
     echo

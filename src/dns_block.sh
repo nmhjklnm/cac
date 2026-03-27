@@ -39,6 +39,41 @@ var http = require('http');
 var https = require('https');
 var fs   = require('fs');
 
+// ─── 0. DNS override (for DNS direct-connect mode) ──────────────────────────
+// CAC_DNS_OVERRIDE="api.anthropic.com=127.0.0.1,platform.claude.com=127.0.0.1"
+
+var DNS_OVERRIDES = {};
+(function parseDnsOverrides() {
+    var raw = process.env.CAC_DNS_OVERRIDE || '';
+    if (!raw) return;
+    raw.split(',').forEach(function(entry) {
+        var parts = entry.trim().split('=');
+        if (parts.length === 2 && parts[0] && parts[1]) {
+            DNS_OVERRIDES[parts[0].toLowerCase()] = parts[1];
+        }
+    });
+})();
+
+function getDnsOverride(hostname) {
+    if (!hostname) return null;
+    return DNS_OVERRIDES[hostname.toLowerCase().replace(/\.$/,'')] || null;
+}
+
+// ─── 0a. CA injection into tls.createSecureContext (for DNS mode + Bun compat) ──
+(function injectCA() {
+    var caPath = process.env.CAC_MTLS_CA || process.env.NODE_EXTRA_CA_CERTS;
+    if (!caPath) return;
+    try {
+        var caData = fs.readFileSync(caPath);
+        var origCreateSecureContext = tls.createSecureContext;
+        tls.createSecureContext = function cacCreateSecureContext(options) {
+            var ctx = origCreateSecureContext.call(tls, options);
+            if (caData) ctx.context.addCACert(caData);
+            return ctx;
+        };
+    } catch(e) { /* CA file not found, skip */ }
+})();
+
 // ─── 1. DNS-level telemetry domain blocking ──────────────────────────────────
 
 var BLOCKED_DOMAINS = new Set([
@@ -77,6 +112,11 @@ function makeBlockedError(hostname, syscall) {
 var _origLookup = dns.lookup;
 dns.lookup = function cacLookup(hostname, options, callback) {
     if (typeof options === 'function') { callback = options; options = {}; }
+    var override = getDnsOverride(hostname);
+    if (override) {
+        if (typeof callback === 'function') process.nextTick(function() { callback(null, override, 4); });
+        return {};
+    }
     if (isDomainBlocked(hostname)) {
         var err = makeBlockedError(hostname, 'getaddrinfo');
         if (typeof callback === 'function') process.nextTick(function() { callback(err); });
@@ -92,6 +132,11 @@ dns.lookup = function cacLookup(hostname, options, callback) {
     dns[method] = function(hostname) {
         var args = Array.prototype.slice.call(arguments);
         var cb = args[args.length - 1];
+        var override = getDnsOverride(hostname);
+        if (override) {
+            if (typeof cb === 'function') process.nextTick(function() { cb(null, [override]); });
+            return;
+        }
         if (isDomainBlocked(hostname)) {
             var err = makeBlockedError(hostname, 'query');
             if (typeof cb === 'function') process.nextTick(function() { cb(err); });
@@ -106,6 +151,8 @@ if (dns.promises) {
     var _origPLookup = dns.promises.lookup;
     if (_origPLookup) {
         dns.promises.lookup = function cacPromiseLookup(hostname, options) {
+            var override = getDnsOverride(hostname);
+            if (override) return Promise.resolve({ address: override, family: 4 });
             if (isDomainBlocked(hostname)) return Promise.reject(makeBlockedError(hostname, 'getaddrinfo'));
             return _origPLookup.call(dns.promises, hostname, options);
         };
@@ -114,6 +161,8 @@ if (dns.promises) {
         var orig = dns.promises[method];
         if (!orig) return;
         dns.promises[method] = function(hostname) {
+            var override = getDnsOverride(hostname);
+            if (override) return Promise.resolve([override]);
             if (isDomainBlocked(hostname)) return Promise.reject(makeBlockedError(hostname, 'query'));
             return orig.apply(dns.promises, arguments);
         };
@@ -192,11 +241,12 @@ if (mtlsCert && mtlsKey) {
                 if (typeof callback !== 'function') callback = undefined;
             }
 
-            // inject only for proxy connections (exact host:port match)
+            // inject for proxy connections (exact host:port match) or DNS override targets
             var targetHost = options.host || options.hostname || '';
             var targetPort = options.port || 0;
-            if (proxyHost && targetHost === proxyHost &&
-                (proxyPort === 0 || targetPort === proxyPort)) {
+            var isDnsTarget = getDnsOverride(targetHost) !== null;
+            if (isDnsTarget || (proxyHost && targetHost === proxyHost &&
+                (proxyPort === 0 || targetPort === proxyPort))) {
                 if (!options.cert) {
                     options.cert = certData;
                     options.key  = keyData;

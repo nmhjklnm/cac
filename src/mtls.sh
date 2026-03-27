@@ -82,6 +82,49 @@ _generate_client_cert() {
     rm -f "$client_csr"
 }
 
+# generate server TLS cert (for DNS direct-connect: local TLS termination)
+# SAN: api.anthropic.com, platform.claude.com — signed by our CA
+_generate_server_cert() {
+    local ca_key="$CAC_DIR/ca/ca_key.pem" ca_cert="$CAC_DIR/ca/ca_cert.pem"
+    [[ -f "$ca_key" ]] && [[ -f "$ca_cert" ]] || return 1
+    local sk="$CAC_DIR/server_key.pem" sc="$CAC_DIR/server_cert.pem" csr="$CAC_DIR/server_csr.pem"
+    # skip if already valid
+    [[ -f "$sc" ]] && [[ -f "$sk" ]] && openssl verify -CAfile "$ca_cert" "$sc" >/dev/null 2>&1 && return 0
+    openssl genrsa -out "$sk" 2048 2>/dev/null || return 1
+    chmod 600 "$sk"
+    openssl req -new -key "$sk" -out "$csr" -subj "/CN=api.anthropic.com/O=cac/OU=dns-direct" 2>/dev/null || return 1
+    openssl x509 -req -in "$csr" -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
+        -out "$sc" -days 365 \
+        -extfile <(printf "subjectAltName=DNS:api.anthropic.com,DNS:platform.claude.com\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth") 2>/dev/null || return 1
+    chmod 644 "$sc"; rm -f "$csr"
+}
+
+# install CA cert into OS trust store (requires sudo)
+_trust_ca_cert() {
+    local ca_cert="$CAC_DIR/ca/ca_cert.pem"
+    [[ -f "$ca_cert" ]] || return 1
+    local os_name; os_name=$(uname -s)
+    if [[ "$os_name" == "Darwin" ]]; then
+        if ! security verify-cert -c "$ca_cert" >/dev/null 2>&1; then
+            echo "  Installing CA cert to system trust store (requires admin password)..."
+            sudo security add-trusted-cert -d -r trustRoot \
+                -k /Library/Keychains/System.keychain "$ca_cert" 2>/dev/null || {
+                echo "  warning: CA cert not installed to system trust store" >&2
+                echo "  manual: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $ca_cert" >&2
+                return 1
+            }
+            echo "  $(_green "✓") CA cert added to macOS system trust store"
+        fi
+    elif [[ "$os_name" == "Linux" ]]; then
+        local sys_ca="/usr/local/share/ca-certificates/cac-ca.crt"
+        if [[ ! -f "$sys_ca" ]] || ! diff -q "$ca_cert" "$sys_ca" >/dev/null 2>&1; then
+            sudo cp "$ca_cert" "$sys_ca" 2>/dev/null || return 1
+            sudo update-ca-certificates 2>/dev/null || true
+            echo "  $(_green "✓") CA cert added to Linux system trust store"
+        fi
+    fi
+}
+
 # verify mTLS certificate status
 _check_mtls() {
     local env_dir="$1"

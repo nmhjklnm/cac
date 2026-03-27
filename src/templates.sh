@@ -167,7 +167,23 @@ if [[ -f "$_env_dir/proxy" ]]; then
     PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
 fi
 
-if [[ -n "$PROXY" ]]; then
+# DNS direct-connect mode — optional alternative to proxy
+DNS_SERVER=""
+[[ -f "$_env_dir/dns_server" ]] && DNS_SERVER=$(tr -d '[:space:]' < "$_env_dir/dns_server")
+TOKEN=""
+[[ -f "$_env_dir/token" ]] && TOKEN=$(tr -d '[:space:]' < "$_env_dir/token")
+
+if [[ -n "$DNS_SERVER" ]]; then
+    # pre-flight: DNS server connectivity
+    _dns_host="${DNS_SERVER%%:*}"
+    _dns_port="${DNS_SERVER##*:}"
+    [[ "$_dns_host" == "$DNS_SERVER" ]] && _dns_port="443"
+    if ! (echo >/dev/tcp/"$_dns_host"/"$_dns_port") 2>/dev/null; then
+        echo "[cac] error: [$_name] DNS server $_dns_host:$_dns_port unreachable, refusing to start." >&2
+        echo "[cac] hint: run 'cac env check' to diagnose" >&2
+        exit 1
+    fi
+elif [[ -n "$PROXY" ]]; then
     # pre-flight: proxy connectivity (pure bash, no fork)
     _hp="${PROXY##*@}"; _hp="${_hp##*://}"
     _host="${_hp%%:*}"
@@ -192,8 +208,14 @@ if [[ -f "$_env_dir/stable_id" ]]; then
     fi
 fi
 
-# inject env vars — proxy (only when proxy is configured)
-if [[ -n "$PROXY" ]]; then
+# inject env vars — mode-specific
+if [[ -n "$DNS_SERVER" ]]; then
+    # DNS direct-connect: override DNS resolution, no proxy env vars
+    export CAC_DNS_OVERRIDE="api.anthropic.com=127.0.0.1,platform.claude.com=127.0.0.1"
+    unset HTTPS_PROXY HTTP_PROXY ALL_PROXY
+    # force OAuth, clear API keys
+    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+elif [[ -n "$PROXY" ]]; then
     export _CAC_PROXY="$PROXY"
     export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
     export NO_PROXY="localhost,127.0.0.1"
@@ -290,9 +312,44 @@ if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
 fi
 [[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac setup'" >&2; exit 1; }
 
+# ── DNS mode: launch cac-relay TLS or verify socat ──
+_relay_tls_pid=""
+if [[ -n "$DNS_SERVER" ]]; then
+    if [[ -n "$TOKEN" ]]; then
+        _relay_bin="$CAC_DIR/cac-relay"
+        _server_cert="$CAC_DIR/server_cert.pem"
+        _server_key="$CAC_DIR/server_key.pem"
+        _ca_cert="$CAC_DIR/ca/ca_cert.pem"
+        if [[ -x "$_relay_bin" ]] && [[ -f "$_server_cert" ]] && [[ -f "$_server_key" ]] && [[ -f "$_ca_cert" ]]; then
+            # Check if already listening on 443
+            if ! (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null; then
+                _sudo=""
+                [[ "$(id -u)" != "0" ]] && _sudo="sudo"
+                $_sudo "$_relay_bin" tls 443 "$DNS_SERVER" "$TOKEN" "$_server_cert" "$_server_key" "$_ca_cert" \
+                    </dev/null >"$CAC_DIR/relay-tls.log" 2>&1 &
+                _relay_tls_pid=$!
+                for _ri in {1..30}; do
+                    (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null && break
+                    sleep 0.1
+                done
+            fi
+        else
+            echo "[cac] warning: DNS mode with token requires cac-relay binary + certs" >&2
+            echo "[cac] hint: run setup-dns.sh or download cac-relay to $CAC_DIR/" >&2
+        fi
+    else
+        # No token: verify socat/listener on 443
+        if ! (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null; then
+            echo "[cac] error: DNS mode requires port 443 listener (socat or cac-relay)" >&2
+            echo "[cac] hint: run setup-dns.sh to configure socat" >&2
+            exit 1
+        fi
+    fi
+fi
+
 # ── Relay local forwarding (always enabled when proxy is set) ──
 _relay_active=false
-if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
+if [[ -z "$DNS_SERVER" ]] && [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
@@ -332,7 +389,13 @@ fi
 
 # cleanup function
 _cleanup_all() {
-    # cleanup relay
+    # cleanup relay TLS (DNS mode)
+    if [[ -n "${_relay_tls_pid:-}" ]]; then
+        kill "$_relay_tls_pid" 2>/dev/null || true
+        # if launched with sudo, also kill as root
+        sudo kill "$_relay_tls_pid" 2>/dev/null || true
+    fi
+    # cleanup relay (proxy mode)
     if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
         local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
         [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true

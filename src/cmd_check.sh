@@ -14,6 +14,8 @@ cmd_check() {
 
     local env_dir="$ENVS_DIR/$current"
     local proxy; proxy=$(_read "$env_dir/proxy" "")
+    local dns_server; dns_server=$(_read "$env_dir/dns_server" "")
+    local token; token=$(_read "$env_dir/token" "")
 
     # Resolve version
     local ver; ver=$(_read "$env_dir/version" "")
@@ -29,8 +31,11 @@ cmd_check() {
     local problems=()
 
     # ── header (neutral, no pass/fail yet) ──
+    local mode="proxy"
+    [[ -n "$dns_server" ]] && mode="dns"
+    [[ -z "$proxy" ]] && [[ -z "$dns_server" ]] && mode="local"
     echo
-    echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+    echo "  $(_bold "$current") $(_dim "(claude $ver, $mode)")"
     echo
 
     # ── wrapper check (instant) ──
@@ -69,9 +74,49 @@ cmd_check() {
         problems+=("telemetry shield ${env_ok}/${env_total}")
     fi
 
+    # ── DNS mode check ──
+    if [[ -n "$dns_server" ]]; then
+        local dns_host="${dns_server%%:*}" dns_port="${dns_server##*:}"
+        [[ "$dns_host" == "$dns_server" ]] && dns_port="443"
+        if (echo >/dev/tcp/"$dns_host"/"$dns_port") 2>/dev/null; then
+            echo "    $(_green "✓") dns server $dns_host:$dns_port reachable"
+        else
+            echo "    $(_red "✗") dns server $dns_host:$dns_port unreachable"
+            problems+=("dns server unreachable")
+        fi
+
+        if (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null; then
+            echo "    $(_green "✓") port 443   listening"
+        else
+            echo "    $(_red "✗") port 443   not listening (run setup-dns.sh)"
+            problems+=("port 443 not listening")
+        fi
+
+        if grep -qE '^\s*127\.0\.0\.1\s+.*api\.anthropic\.com' /etc/hosts 2>/dev/null; then
+            echo "    $(_green "✓") /etc/hosts api.anthropic.com → 127.0.0.1"
+        else
+            echo "    $(_yellow "⚠") /etc/hosts not configured (dns-guard.js fallback active)"
+        fi
+
+        if [[ -n "$token" ]]; then
+            if [[ -x "$CAC_DIR/cac-relay" ]]; then
+                echo "    $(_green "✓") cac-relay  binary present"
+            else
+                echo "    $(_red "✗") cac-relay  binary not found"
+                problems+=("cac-relay binary missing")
+            fi
+        fi
+
+        if [[ -f "$CAC_DIR/server_cert.pem" ]]; then
+            echo "    $(_green "✓") server cert present"
+        else
+            echo "    $(_yellow "⚠") server cert not found"
+        fi
+    fi
+
     # ── network check (slow — streaming output) ──
     local proxy_ip=""
-    if [[ -n "$proxy" ]]; then
+    if [[ -z "$dns_server" ]] && [[ -n "$proxy" ]]; then
         if ! _proxy_reachable "$proxy"; then
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")

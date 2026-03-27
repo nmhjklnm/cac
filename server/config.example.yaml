@@ -1,0 +1,4 @@
+listen: ":8080"          # 代理端口（客户端连接用）
+admin_listen: ":8081"   # 管理后台端口
+admin_pass: "changeme"  # 管理后台密码
+db_path: "/etc/anideaai-server/anideaai-server.db"  # 数据库路径

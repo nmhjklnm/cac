@@ -444,6 +444,41 @@ var http = require('http');
 var https = require('https');
 var fs   = require('fs');
 
+// ─── 0. DNS override (for DNS direct-connect mode) ──────────────────────────
+// CAC_DNS_OVERRIDE="api.anthropic.com=127.0.0.1,platform.claude.com=127.0.0.1"
+
+var DNS_OVERRIDES = {};
+(function parseDnsOverrides() {
+    var raw = process.env.CAC_DNS_OVERRIDE || '';
+    if (!raw) return;
+    raw.split(',').forEach(function(entry) {
+        var parts = entry.trim().split('=');
+        if (parts.length === 2 && parts[0] && parts[1]) {
+            DNS_OVERRIDES[parts[0].toLowerCase()] = parts[1];
+        }
+    });
+})();
+
+function getDnsOverride(hostname) {
+    if (!hostname) return null;
+    return DNS_OVERRIDES[hostname.toLowerCase().replace(/\.$/,'')] || null;
+}
+
+// ─── 0a. CA injection into tls.createSecureContext (for DNS mode + Bun compat) ──
+(function injectCA() {
+    var caPath = process.env.CAC_MTLS_CA || process.env.NODE_EXTRA_CA_CERTS;
+    if (!caPath) return;
+    try {
+        var caData = fs.readFileSync(caPath);
+        var origCreateSecureContext = tls.createSecureContext;
+        tls.createSecureContext = function cacCreateSecureContext(options) {
+            var ctx = origCreateSecureContext.call(tls, options);
+            if (caData) ctx.context.addCACert(caData);
+            return ctx;
+        };
+    } catch(e) { /* CA file not found, skip */ }
+})();
+
 // ─── 1. DNS-level telemetry domain blocking ──────────────────────────────────
 
 var BLOCKED_DOMAINS = new Set([
@@ -482,6 +517,11 @@ function makeBlockedError(hostname, syscall) {
 var _origLookup = dns.lookup;
 dns.lookup = function cacLookup(hostname, options, callback) {
     if (typeof options === 'function') { callback = options; options = {}; }
+    var override = getDnsOverride(hostname);
+    if (override) {
+        if (typeof callback === 'function') process.nextTick(function() { callback(null, override, 4); });
+        return {};
+    }
     if (isDomainBlocked(hostname)) {
         var err = makeBlockedError(hostname, 'getaddrinfo');
         if (typeof callback === 'function') process.nextTick(function() { callback(err); });
@@ -497,6 +537,11 @@ dns.lookup = function cacLookup(hostname, options, callback) {
     dns[method] = function(hostname) {
         var args = Array.prototype.slice.call(arguments);
         var cb = args[args.length - 1];
+        var override = getDnsOverride(hostname);
+        if (override) {
+            if (typeof cb === 'function') process.nextTick(function() { cb(null, [override]); });
+            return;
+        }
         if (isDomainBlocked(hostname)) {
             var err = makeBlockedError(hostname, 'query');
             if (typeof cb === 'function') process.nextTick(function() { cb(err); });
@@ -511,6 +556,8 @@ if (dns.promises) {
     var _origPLookup = dns.promises.lookup;
     if (_origPLookup) {
         dns.promises.lookup = function cacPromiseLookup(hostname, options) {
+            var override = getDnsOverride(hostname);
+            if (override) return Promise.resolve({ address: override, family: 4 });
             if (isDomainBlocked(hostname)) return Promise.reject(makeBlockedError(hostname, 'getaddrinfo'));
             return _origPLookup.call(dns.promises, hostname, options);
         };
@@ -519,6 +566,8 @@ if (dns.promises) {
         var orig = dns.promises[method];
         if (!orig) return;
         dns.promises[method] = function(hostname) {
+            var override = getDnsOverride(hostname);
+            if (override) return Promise.resolve([override]);
             if (isDomainBlocked(hostname)) return Promise.reject(makeBlockedError(hostname, 'query'));
             return orig.apply(dns.promises, arguments);
         };
@@ -597,11 +646,12 @@ if (mtlsCert && mtlsKey) {
                 if (typeof callback !== 'function') callback = undefined;
             }
 
-            // inject only for proxy connections (exact host:port match)
+            // inject for proxy connections (exact host:port match) or DNS override targets
             var targetHost = options.host || options.hostname || '';
             var targetPort = options.port || 0;
-            if (proxyHost && targetHost === proxyHost &&
-                (proxyPort === 0 || targetPort === proxyPort)) {
+            var isDnsTarget = getDnsOverride(targetHost) !== null;
+            if (isDnsTarget || (proxyHost && targetHost === proxyHost &&
+                (proxyPort === 0 || targetPort === proxyPort))) {
                 if (!options.cert) {
                     options.cert = certData;
                     options.key  = keyData;
@@ -890,6 +940,49 @@ _generate_client_cert() {
     rm -f "$client_csr"
 }
 
+# generate server TLS cert (for DNS direct-connect: local TLS termination)
+# SAN: api.anthropic.com, platform.claude.com — signed by our CA
+_generate_server_cert() {
+    local ca_key="$CAC_DIR/ca/ca_key.pem" ca_cert="$CAC_DIR/ca/ca_cert.pem"
+    [[ -f "$ca_key" ]] && [[ -f "$ca_cert" ]] || return 1
+    local sk="$CAC_DIR/server_key.pem" sc="$CAC_DIR/server_cert.pem" csr="$CAC_DIR/server_csr.pem"
+    # skip if already valid
+    [[ -f "$sc" ]] && [[ -f "$sk" ]] && openssl verify -CAfile "$ca_cert" "$sc" >/dev/null 2>&1 && return 0
+    openssl genrsa -out "$sk" 2048 2>/dev/null || return 1
+    chmod 600 "$sk"
+    openssl req -new -key "$sk" -out "$csr" -subj "/CN=api.anthropic.com/O=cac/OU=dns-direct" 2>/dev/null || return 1
+    openssl x509 -req -in "$csr" -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
+        -out "$sc" -days 365 \
+        -extfile <(printf "subjectAltName=DNS:api.anthropic.com,DNS:platform.claude.com\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth") 2>/dev/null || return 1
+    chmod 644 "$sc"; rm -f "$csr"
+}
+
+# install CA cert into OS trust store (requires sudo)
+_trust_ca_cert() {
+    local ca_cert="$CAC_DIR/ca/ca_cert.pem"
+    [[ -f "$ca_cert" ]] || return 1
+    local os_name; os_name=$(uname -s)
+    if [[ "$os_name" == "Darwin" ]]; then
+        if ! security verify-cert -c "$ca_cert" >/dev/null 2>&1; then
+            echo "  Installing CA cert to system trust store (requires admin password)..."
+            sudo security add-trusted-cert -d -r trustRoot \
+                -k /Library/Keychains/System.keychain "$ca_cert" 2>/dev/null || {
+                echo "  warning: CA cert not installed to system trust store" >&2
+                echo "  manual: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $ca_cert" >&2
+                return 1
+            }
+            echo "  $(_green "✓") CA cert added to macOS system trust store"
+        fi
+    elif [[ "$os_name" == "Linux" ]]; then
+        local sys_ca="/usr/local/share/ca-certificates/cac-ca.crt"
+        if [[ ! -f "$sys_ca" ]] || ! diff -q "$ca_cert" "$sys_ca" >/dev/null 2>&1; then
+            sudo cp "$ca_cert" "$sys_ca" 2>/dev/null || return 1
+            sudo update-ca-certificates 2>/dev/null || true
+            echo "  $(_green "✓") CA cert added to Linux system trust store"
+        fi
+    fi
+}
+
 # verify mTLS certificate status
 _check_mtls() {
     local env_dir="$1"
@@ -1094,7 +1187,23 @@ if [[ -f "$_env_dir/proxy" ]]; then
     PROXY=$(tr -d '[:space:]' < "$_env_dir/proxy")
 fi
 
-if [[ -n "$PROXY" ]]; then
+# DNS direct-connect mode — optional alternative to proxy
+DNS_SERVER=""
+[[ -f "$_env_dir/dns_server" ]] && DNS_SERVER=$(tr -d '[:space:]' < "$_env_dir/dns_server")
+TOKEN=""
+[[ -f "$_env_dir/token" ]] && TOKEN=$(tr -d '[:space:]' < "$_env_dir/token")
+
+if [[ -n "$DNS_SERVER" ]]; then
+    # pre-flight: DNS server connectivity
+    _dns_host="${DNS_SERVER%%:*}"
+    _dns_port="${DNS_SERVER##*:}"
+    [[ "$_dns_host" == "$DNS_SERVER" ]] && _dns_port="443"
+    if ! (echo >/dev/tcp/"$_dns_host"/"$_dns_port") 2>/dev/null; then
+        echo "[cac] error: [$_name] DNS server $_dns_host:$_dns_port unreachable, refusing to start." >&2
+        echo "[cac] hint: run 'cac env check' to diagnose" >&2
+        exit 1
+    fi
+elif [[ -n "$PROXY" ]]; then
     # pre-flight: proxy connectivity (pure bash, no fork)
     _hp="${PROXY##*@}"; _hp="${_hp##*://}"
     _host="${_hp%%:*}"
@@ -1119,8 +1228,14 @@ if [[ -f "$_env_dir/stable_id" ]]; then
     fi
 fi
 
-# inject env vars — proxy (only when proxy is configured)
-if [[ -n "$PROXY" ]]; then
+# inject env vars — mode-specific
+if [[ -n "$DNS_SERVER" ]]; then
+    # DNS direct-connect: override DNS resolution, no proxy env vars
+    export CAC_DNS_OVERRIDE="api.anthropic.com=127.0.0.1,platform.claude.com=127.0.0.1"
+    unset HTTPS_PROXY HTTP_PROXY ALL_PROXY
+    # force OAuth, clear API keys
+    unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+elif [[ -n "$PROXY" ]]; then
     export _CAC_PROXY="$PROXY"
     export HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" ALL_PROXY="$PROXY"
     export NO_PROXY="localhost,127.0.0.1"
@@ -1217,9 +1332,44 @@ if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
 fi
 [[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac setup'" >&2; exit 1; }
 
+# ── DNS mode: launch cac-relay TLS or verify socat ──
+_relay_tls_pid=""
+if [[ -n "$DNS_SERVER" ]]; then
+    if [[ -n "$TOKEN" ]]; then
+        _relay_bin="$CAC_DIR/cac-relay"
+        _server_cert="$CAC_DIR/server_cert.pem"
+        _server_key="$CAC_DIR/server_key.pem"
+        _ca_cert="$CAC_DIR/ca/ca_cert.pem"
+        if [[ -x "$_relay_bin" ]] && [[ -f "$_server_cert" ]] && [[ -f "$_server_key" ]] && [[ -f "$_ca_cert" ]]; then
+            # Check if already listening on 443
+            if ! (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null; then
+                _sudo=""
+                [[ "$(id -u)" != "0" ]] && _sudo="sudo"
+                $_sudo "$_relay_bin" tls 443 "$DNS_SERVER" "$TOKEN" "$_server_cert" "$_server_key" "$_ca_cert" \
+                    </dev/null >"$CAC_DIR/relay-tls.log" 2>&1 &
+                _relay_tls_pid=$!
+                for _ri in {1..30}; do
+                    (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null && break
+                    sleep 0.1
+                done
+            fi
+        else
+            echo "[cac] warning: DNS mode with token requires cac-relay binary + certs" >&2
+            echo "[cac] hint: run setup-dns.sh or download cac-relay to $CAC_DIR/" >&2
+        fi
+    else
+        # No token: verify socat/listener on 443
+        if ! (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null; then
+            echo "[cac] error: DNS mode requires port 443 listener (socat or cac-relay)" >&2
+            echo "[cac] hint: run setup-dns.sh to configure socat" >&2
+            exit 1
+        fi
+    fi
+fi
+
 # ── Relay local forwarding (always enabled when proxy is set) ──
 _relay_active=false
-if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
+if [[ -z "$DNS_SERVER" ]] && [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
@@ -1259,7 +1409,13 @@ fi
 
 # cleanup function
 _cleanup_all() {
-    # cleanup relay
+    # cleanup relay TLS (DNS mode)
+    if [[ -n "${_relay_tls_pid:-}" ]]; then
+        kill "$_relay_tls_pid" 2>/dev/null || true
+        # if launched with sudo, also kill as root
+        sudo kill "$_relay_tls_pid" 2>/dev/null || true
+    fi
+    # cleanup relay (proxy mode)
     if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
         local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
         [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
@@ -1488,11 +1644,13 @@ cmd_setup() {
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local"
+    local name="" proxy="" dns_server="" token="" claude_ver="" env_type="local"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
+            -d|--dns)    [[ $# -ge 2 ]] || _die "$1 requires a value"; dns_server="$2"; shift 2 ;;
+            -t|--token)  [[ $# -ge 2 ]] || _die "$1 requires a value"; token="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
             -*)          _die "unknown option: $1" ;;
@@ -1500,7 +1658,8 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>]"
+    [[ -n "$proxy" ]] && [[ -n "$dns_server" ]] && _die "cannot specify both -p (proxy) and -d (dns server)"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-d <server_ip>] [-t <token>] [-c <version>]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -1512,6 +1671,25 @@ _env_cmd_create() {
     # No version specified → use latest
     [[ -z "$claude_ver" ]] && claude_ver="latest"
     claude_ver=$(_ensure_version_installed "$claude_ver") || exit 1
+
+    # DNS server validation
+    local dns_ip="" dns_port=""
+    if [[ -n "$dns_server" ]]; then
+        dns_ip="${dns_server%%:*}"
+        dns_port="${dns_server##*:}"
+        [[ "$dns_ip" == "$dns_server" ]] && dns_port="443"
+        if ! [[ "$dns_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            _die "invalid IP address: $dns_ip (DNS mode requires IP, not domain)"
+        fi
+        dns_server="${dns_ip}:${dns_port}"
+        printf "  $(_dim "Checking DNS server ...") "
+        if (echo >/dev/tcp/"$dns_ip"/"$dns_port") 2>/dev/null; then
+            echo "$(_green "reachable")"
+        else
+            echo "$(_yellow "unreachable (continuing anyway)")"
+        fi
+        env_type="dns"
+    fi
 
     # Auto-detect proxy protocol
     local proxy_url=""
@@ -1528,9 +1706,21 @@ _env_cmd_create() {
         fi
     fi
 
-    # Geo-detect timezone (single request via proxy)
+    # Geo-detect timezone (single request via proxy, or direct for DNS mode)
     local tz="America/New_York" lang="en_US.UTF-8"
-    if [[ -n "$proxy_url" ]]; then
+    if [[ -n "$dns_server" ]]; then
+        printf "  $(_dim "Detecting timezone ...") "
+        local ip_info
+        ip_info=$(curl -s --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
+        if [[ -n "$ip_info" ]]; then
+            local detected_tz
+            detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+            [[ -n "$detected_tz" ]] && tz="$detected_tz"
+            echo "$(_cyan "$tz")"
+        else
+            echo "$(_dim "default $tz")"
+        fi
+    elif [[ -n "$proxy_url" ]]; then
         printf "  $(_dim "Detecting timezone ...") "
         local ip_info
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
@@ -1545,7 +1735,9 @@ _env_cmd_create() {
     fi
 
     mkdir -p "$env_dir"
-    [[ -n "$proxy_url" ]] && echo "$proxy_url" > "$env_dir/proxy"
+    [[ -n "$proxy_url" ]]   && echo "$proxy_url"   > "$env_dir/proxy"
+    [[ -n "$dns_server" ]]  && echo "$dns_server"   > "$env_dir/dns_server"
+    [[ -n "$token" ]]       && echo "$token"         > "$env_dir/token"
     echo "$(_new_uuid)"       > "$env_dir/uuid"
     echo "$(_new_sid)"        > "$env_dir/stable_id"
     echo "$(_new_user_id)"    > "$env_dir/user_id"
@@ -1565,6 +1757,12 @@ _env_cmd_create() {
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
+    # DNS mode: generate server cert + trust CA
+    if [[ -n "$dns_server" ]]; then
+        _generate_server_cert >/dev/null 2>&1 || true
+        _trust_ca_cert 2>/dev/null || true
+    fi
+
     # Auto-activate
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
@@ -1578,8 +1776,10 @@ _env_cmd_create() {
     echo
     echo "  $(_green_bold "Created") $(_bold "$name") $(_dim "in $elapsed")"
     echo
-    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
-    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    [[ -n "$proxy_url" ]]   && echo "  $(_green "+") proxy    $proxy_url"
+    [[ -n "$dns_server" ]]  && echo "  $(_green "+") dns      $(_cyan "$dns_server")"
+    [[ -n "$token" ]]       && echo "  $(_green "+") token    ${token:0:8}..."
+    [[ -n "$claude_ver" ]]  && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
     echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
@@ -1596,16 +1796,25 @@ _env_cmd_ls() {
     local current; current=$(_current_env)
 
     # Collect data first to calculate column widths
-    local names=() versions=() proxies=() paths=()
+    local names=() versions=() modes=() paths=()
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
         names+=("$(basename "$env_dir")")
         versions+=("$(_read "$env_dir/version" "system")")
         local p; p=$(_read "$env_dir/proxy" "")
-        if [[ -n "$p" ]] && [[ "$p" == *"://"*"@"* ]]; then
-            p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
+        local d; d=$(_read "$env_dir/dns_server" "")
+        local mode_str
+        if [[ -n "$d" ]]; then
+            mode_str="dns:$d"
+        elif [[ -n "$p" ]]; then
+            if [[ "$p" == *"://"*"@"* ]]; then
+                p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
+            fi
+            mode_str="$p"
+        else
+            mode_str="—"
         fi
-        proxies+=("${p:-—}")
+        modes+=("$mode_str")
         local ep="${env_dir}.claude/"
         paths+=("${ep/#$HOME/~}")
     done
@@ -1614,29 +1823,29 @@ _env_cmd_ls() {
     local max_name=4 max_ver=6 max_proxy=5
     local i
     for i in "${!names[@]}"; do
-        local nl=${#names[$i]} vl=${#versions[$i]} pl=${#proxies[$i]}
+        local nl=${#names[$i]} vl=${#versions[$i]} pl=${#modes[$i]}
         (( nl > max_name )) && max_name=$nl
         (( vl > max_ver )) && max_ver=$vl
         (( pl > max_proxy )) && max_proxy=$pl
     done
-    # Cap proxy column
+    # Cap mode column
     (( max_proxy > 40 )) && max_proxy=40
 
     # Header
-    printf "  $(_dim "  %-${max_name}s  %-${max_ver}s  %-${max_proxy}s  %s")" "NAME" "CLAUDE" "PROXY" "ENV"
+    printf "  $(_dim "  %-${max_name}s  %-${max_ver}s  %-${max_proxy}s  %s")" "NAME" "CLAUDE" "MODE" "ENV"
     echo
 
     # Rows
     for i in "${!names[@]}"; do
         local name="${names[$i]}"
         local ver="${versions[$i]}"
-        local proxy="${proxies[$i]}"
+        local mode="${modes[$i]}"
         local epath="${paths[$i]}"
 
         if [[ "$name" == "$current" ]]; then
-            printf "  $(_green "▶") $(_bold "%-${max_name}s")  $(_cyan "%-${max_ver}s")  %-${max_proxy}s  $(_dim "%s")\n" "$name" "$ver" "$proxy" "$epath"
+            printf "  $(_green "▶") $(_bold "%-${max_name}s")  $(_cyan "%-${max_ver}s")  %-${max_proxy}s  $(_dim "%s")\n" "$name" "$ver" "$mode" "$epath"
         else
-            printf "  $(_dim "○") %-${max_name}s  $(_cyan "%-${max_ver}s")  $(_dim "%-${max_proxy}s")  $(_dim "%s")\n" "$name" "$ver" "$proxy" "$epath"
+            printf "  $(_dim "○") %-${max_name}s  $(_cyan "%-${max_ver}s")  $(_dim "%-${max_proxy}s")  $(_dim "%s")\n" "$name" "$ver" "$mode" "$epath"
         fi
     done
 }
@@ -1689,7 +1898,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version"
+    local known_keys="proxy dns_server token version"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -1747,6 +1956,33 @@ _env_cmd_set() {
                 echo "$(_green_bold "Set") proxy for $(_bold "$name") → $proxy_url"
             fi
             ;;
+        dns_server)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/dns_server"
+                echo "$(_green_bold "Removed") dns_server from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] dns_server <ip[:port]>"
+                local dns_ip="${value%%:*}" dns_port="${value##*:}"
+                [[ "$dns_ip" == "$value" ]] && dns_port="443"
+                [[ "$dns_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || _die "invalid IP: $dns_ip"
+                rm -f "$env_dir/proxy"  # mutual exclusion
+                echo "${dns_ip}:${dns_port}" > "$env_dir/dns_server"
+                # generate server cert if needed
+                _generate_server_cert >/dev/null 2>&1 || true
+                _trust_ca_cert 2>/dev/null || true
+                echo "$(_green_bold "Set") dns_server for $(_bold "$name") → ${dns_ip}:${dns_port}"
+            fi
+            ;;
+        token)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/token"
+                echo "$(_green_bold "Removed") token from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] token <value>"
+                echo "$value" > "$env_dir/token"
+                echo "$(_green_bold "Set") token for $(_bold "$name") → ${value:0:8}..."
+            fi
+            ;;
         version)
             [[ "$remove" != "true" ]] || _die "cannot remove version — use 'cac env set $name version latest'"
             [[ -n "$value" ]] || _die "usage: cac env set [name] version <ver|latest>"
@@ -1756,7 +1992,7 @@ _env_cmd_set() {
             echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
             ;;
         *)
-            _die "unknown key '$key' — use proxy or version"
+            _die "unknown key '$key' — use proxy, dns_server, token, or version"
             ;;
     esac
 }
@@ -1774,10 +2010,12 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver]"
-            echo "    $(_green "set") [name] proxy <url>           Set proxy"
-            echo "    $(_green "set") [name] proxy --remove        Remove proxy"
-            echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+            echo "    $(_green "create") <name> [-p proxy] [-d server_ip] [-t token] [-c ver]"
+            echo "    $(_green "set") [name] proxy <url>             Set proxy"
+            echo "    $(_green "set") [name] proxy --remove          Remove proxy"
+            echo "    $(_green "set") [name] dns_server <ip[:port]>  Set DNS server"
+            echo "    $(_green "set") [name] token <value>           Set token"
+            echo "    $(_green "set") [name] version <ver|latest>    Change Claude version"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
@@ -2025,6 +2263,8 @@ cmd_check() {
 
     local env_dir="$ENVS_DIR/$current"
     local proxy; proxy=$(_read "$env_dir/proxy" "")
+    local dns_server; dns_server=$(_read "$env_dir/dns_server" "")
+    local token; token=$(_read "$env_dir/token" "")
 
     # Resolve version
     local ver; ver=$(_read "$env_dir/version" "")
@@ -2040,8 +2280,11 @@ cmd_check() {
     local problems=()
 
     # ── header (neutral, no pass/fail yet) ──
+    local mode="proxy"
+    [[ -n "$dns_server" ]] && mode="dns"
+    [[ -z "$proxy" ]] && [[ -z "$dns_server" ]] && mode="local"
     echo
-    echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+    echo "  $(_bold "$current") $(_dim "(claude $ver, $mode)")"
     echo
 
     # ── wrapper check (instant) ──
@@ -2080,9 +2323,49 @@ cmd_check() {
         problems+=("telemetry shield ${env_ok}/${env_total}")
     fi
 
+    # ── DNS mode check ──
+    if [[ -n "$dns_server" ]]; then
+        local dns_host="${dns_server%%:*}" dns_port="${dns_server##*:}"
+        [[ "$dns_host" == "$dns_server" ]] && dns_port="443"
+        if (echo >/dev/tcp/"$dns_host"/"$dns_port") 2>/dev/null; then
+            echo "    $(_green "✓") dns server $dns_host:$dns_port reachable"
+        else
+            echo "    $(_red "✗") dns server $dns_host:$dns_port unreachable"
+            problems+=("dns server unreachable")
+        fi
+
+        if (echo >/dev/tcp/127.0.0.1/443) 2>/dev/null; then
+            echo "    $(_green "✓") port 443   listening"
+        else
+            echo "    $(_red "✗") port 443   not listening (run setup-dns.sh)"
+            problems+=("port 443 not listening")
+        fi
+
+        if grep -qE '^\s*127\.0\.0\.1\s+.*api\.anthropic\.com' /etc/hosts 2>/dev/null; then
+            echo "    $(_green "✓") /etc/hosts api.anthropic.com → 127.0.0.1"
+        else
+            echo "    $(_yellow "⚠") /etc/hosts not configured (dns-guard.js fallback active)"
+        fi
+
+        if [[ -n "$token" ]]; then
+            if [[ -x "$CAC_DIR/cac-relay" ]]; then
+                echo "    $(_green "✓") cac-relay  binary present"
+            else
+                echo "    $(_red "✗") cac-relay  binary not found"
+                problems+=("cac-relay binary missing")
+            fi
+        fi
+
+        if [[ -f "$CAC_DIR/server_cert.pem" ]]; then
+            echo "    $(_green "✓") server cert present"
+        else
+            echo "    $(_yellow "⚠") server cert not found"
+        fi
+    fi
+
     # ── network check (slow — streaming output) ──
     local proxy_ip=""
-    if [[ -n "$proxy" ]]; then
+    if [[ -z "$dns_server" ]] && [[ -n "$proxy" ]]; then
         if ! _proxy_reachable "$proxy"; then
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
@@ -3021,7 +3304,7 @@ cmd_help() {
     echo
 
     echo "  $(_bold "Environment")"
-    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver]"
+    echo "    $(_green "cac env create") <name> [-p proxy] [-d server] [-t token] [-c ver]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
@@ -3047,6 +3330,7 @@ cmd_help() {
 
     echo "  $(_dim "Examples:")"
     echo "    $(_dim "cac env create work -p 1.2.3.4:1080:u:p -c 2.1.81")"
+    echo "    $(_dim "cac env create dns1 -d 64.186.230.163 -t mytoken")"
     echo "    $(_dim "cac env create personal")"
     echo "    $(_dim "cac work")"
     echo

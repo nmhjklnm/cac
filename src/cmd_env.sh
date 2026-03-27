@@ -2,11 +2,13 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local"
+    local name="" proxy="" dns_server="" token="" claude_ver="" env_type="local"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
+            -d|--dns)    [[ $# -ge 2 ]] || _die "$1 requires a value"; dns_server="$2"; shift 2 ;;
+            -t|--token)  [[ $# -ge 2 ]] || _die "$1 requires a value"; token="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
             -*)          _die "unknown option: $1" ;;
@@ -14,7 +16,8 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>]"
+    [[ -n "$proxy" ]] && [[ -n "$dns_server" ]] && _die "cannot specify both -p (proxy) and -d (dns server)"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-d <server_ip>] [-t <token>] [-c <version>]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -26,6 +29,25 @@ _env_cmd_create() {
     # No version specified → use latest
     [[ -z "$claude_ver" ]] && claude_ver="latest"
     claude_ver=$(_ensure_version_installed "$claude_ver") || exit 1
+
+    # DNS server validation
+    local dns_ip="" dns_port=""
+    if [[ -n "$dns_server" ]]; then
+        dns_ip="${dns_server%%:*}"
+        dns_port="${dns_server##*:}"
+        [[ "$dns_ip" == "$dns_server" ]] && dns_port="443"
+        if ! [[ "$dns_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            _die "invalid IP address: $dns_ip (DNS mode requires IP, not domain)"
+        fi
+        dns_server="${dns_ip}:${dns_port}"
+        printf "  $(_dim "Checking DNS server ...") "
+        if (echo >/dev/tcp/"$dns_ip"/"$dns_port") 2>/dev/null; then
+            echo "$(_green "reachable")"
+        else
+            echo "$(_yellow "unreachable (continuing anyway)")"
+        fi
+        env_type="dns"
+    fi
 
     # Auto-detect proxy protocol
     local proxy_url=""
@@ -42,9 +64,21 @@ _env_cmd_create() {
         fi
     fi
 
-    # Geo-detect timezone (single request via proxy)
+    # Geo-detect timezone (single request via proxy, or direct for DNS mode)
     local tz="America/New_York" lang="en_US.UTF-8"
-    if [[ -n "$proxy_url" ]]; then
+    if [[ -n "$dns_server" ]]; then
+        printf "  $(_dim "Detecting timezone ...") "
+        local ip_info
+        ip_info=$(curl -s --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
+        if [[ -n "$ip_info" ]]; then
+            local detected_tz
+            detected_tz=$(echo "$ip_info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+            [[ -n "$detected_tz" ]] && tz="$detected_tz"
+            echo "$(_cyan "$tz")"
+        else
+            echo "$(_dim "default $tz")"
+        fi
+    elif [[ -n "$proxy_url" ]]; then
         printf "  $(_dim "Detecting timezone ...") "
         local ip_info
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
@@ -59,7 +93,9 @@ _env_cmd_create() {
     fi
 
     mkdir -p "$env_dir"
-    [[ -n "$proxy_url" ]] && echo "$proxy_url" > "$env_dir/proxy"
+    [[ -n "$proxy_url" ]]   && echo "$proxy_url"   > "$env_dir/proxy"
+    [[ -n "$dns_server" ]]  && echo "$dns_server"   > "$env_dir/dns_server"
+    [[ -n "$token" ]]       && echo "$token"         > "$env_dir/token"
     echo "$(_new_uuid)"       > "$env_dir/uuid"
     echo "$(_new_sid)"        > "$env_dir/stable_id"
     echo "$(_new_user_id)"    > "$env_dir/user_id"
@@ -79,6 +115,12 @@ _env_cmd_create() {
 
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
+    # DNS mode: generate server cert + trust CA
+    if [[ -n "$dns_server" ]]; then
+        _generate_server_cert >/dev/null 2>&1 || true
+        _trust_ca_cert 2>/dev/null || true
+    fi
+
     # Auto-activate
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
@@ -92,8 +134,10 @@ _env_cmd_create() {
     echo
     echo "  $(_green_bold "Created") $(_bold "$name") $(_dim "in $elapsed")"
     echo
-    [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
-    [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    [[ -n "$proxy_url" ]]   && echo "  $(_green "+") proxy    $proxy_url"
+    [[ -n "$dns_server" ]]  && echo "  $(_green "+") dns      $(_cyan "$dns_server")"
+    [[ -n "$token" ]]       && echo "  $(_green "+") token    ${token:0:8}..."
+    [[ -n "$claude_ver" ]]  && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
     echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
@@ -110,16 +154,25 @@ _env_cmd_ls() {
     local current; current=$(_current_env)
 
     # Collect data first to calculate column widths
-    local names=() versions=() proxies=() paths=()
+    local names=() versions=() modes=() paths=()
     for env_dir in "$ENVS_DIR"/*/; do
         [[ -d "$env_dir" ]] || continue
         names+=("$(basename "$env_dir")")
         versions+=("$(_read "$env_dir/version" "system")")
         local p; p=$(_read "$env_dir/proxy" "")
-        if [[ -n "$p" ]] && [[ "$p" == *"://"*"@"* ]]; then
-            p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
+        local d; d=$(_read "$env_dir/dns_server" "")
+        local mode_str
+        if [[ -n "$d" ]]; then
+            mode_str="dns:$d"
+        elif [[ -n "$p" ]]; then
+            if [[ "$p" == *"://"*"@"* ]]; then
+                p=$(echo "$p" | sed 's|://[^@]*@|://***@|')
+            fi
+            mode_str="$p"
+        else
+            mode_str="—"
         fi
-        proxies+=("${p:-—}")
+        modes+=("$mode_str")
         local ep="${env_dir}.claude/"
         paths+=("${ep/#$HOME/~}")
     done
@@ -128,29 +181,29 @@ _env_cmd_ls() {
     local max_name=4 max_ver=6 max_proxy=5
     local i
     for i in "${!names[@]}"; do
-        local nl=${#names[$i]} vl=${#versions[$i]} pl=${#proxies[$i]}
+        local nl=${#names[$i]} vl=${#versions[$i]} pl=${#modes[$i]}
         (( nl > max_name )) && max_name=$nl
         (( vl > max_ver )) && max_ver=$vl
         (( pl > max_proxy )) && max_proxy=$pl
     done
-    # Cap proxy column
+    # Cap mode column
     (( max_proxy > 40 )) && max_proxy=40
 
     # Header
-    printf "  $(_dim "  %-${max_name}s  %-${max_ver}s  %-${max_proxy}s  %s")" "NAME" "CLAUDE" "PROXY" "ENV"
+    printf "  $(_dim "  %-${max_name}s  %-${max_ver}s  %-${max_proxy}s  %s")" "NAME" "CLAUDE" "MODE" "ENV"
     echo
 
     # Rows
     for i in "${!names[@]}"; do
         local name="${names[$i]}"
         local ver="${versions[$i]}"
-        local proxy="${proxies[$i]}"
+        local mode="${modes[$i]}"
         local epath="${paths[$i]}"
 
         if [[ "$name" == "$current" ]]; then
-            printf "  $(_green "▶") $(_bold "%-${max_name}s")  $(_cyan "%-${max_ver}s")  %-${max_proxy}s  $(_dim "%s")\n" "$name" "$ver" "$proxy" "$epath"
+            printf "  $(_green "▶") $(_bold "%-${max_name}s")  $(_cyan "%-${max_ver}s")  %-${max_proxy}s  $(_dim "%s")\n" "$name" "$ver" "$mode" "$epath"
         else
-            printf "  $(_dim "○") %-${max_name}s  $(_cyan "%-${max_ver}s")  $(_dim "%-${max_proxy}s")  $(_dim "%s")\n" "$name" "$ver" "$proxy" "$epath"
+            printf "  $(_dim "○") %-${max_name}s  $(_cyan "%-${max_ver}s")  $(_dim "%-${max_proxy}s")  $(_dim "%s")\n" "$name" "$ver" "$mode" "$epath"
         fi
     done
 }
@@ -203,7 +256,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version"
+    local known_keys="proxy dns_server token version"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -261,6 +314,33 @@ _env_cmd_set() {
                 echo "$(_green_bold "Set") proxy for $(_bold "$name") → $proxy_url"
             fi
             ;;
+        dns_server)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/dns_server"
+                echo "$(_green_bold "Removed") dns_server from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] dns_server <ip[:port]>"
+                local dns_ip="${value%%:*}" dns_port="${value##*:}"
+                [[ "$dns_ip" == "$value" ]] && dns_port="443"
+                [[ "$dns_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || _die "invalid IP: $dns_ip"
+                rm -f "$env_dir/proxy"  # mutual exclusion
+                echo "${dns_ip}:${dns_port}" > "$env_dir/dns_server"
+                # generate server cert if needed
+                _generate_server_cert >/dev/null 2>&1 || true
+                _trust_ca_cert 2>/dev/null || true
+                echo "$(_green_bold "Set") dns_server for $(_bold "$name") → ${dns_ip}:${dns_port}"
+            fi
+            ;;
+        token)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/token"
+                echo "$(_green_bold "Removed") token from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] token <value>"
+                echo "$value" > "$env_dir/token"
+                echo "$(_green_bold "Set") token for $(_bold "$name") → ${value:0:8}..."
+            fi
+            ;;
         version)
             [[ "$remove" != "true" ]] || _die "cannot remove version — use 'cac env set $name version latest'"
             [[ -n "$value" ]] || _die "usage: cac env set [name] version <ver|latest>"
@@ -270,7 +350,7 @@ _env_cmd_set() {
             echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
             ;;
         *)
-            _die "unknown key '$key' — use proxy or version"
+            _die "unknown key '$key' — use proxy, dns_server, token, or version"
             ;;
     esac
 }
@@ -288,10 +368,12 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver]"
-            echo "    $(_green "set") [name] proxy <url>           Set proxy"
-            echo "    $(_green "set") [name] proxy --remove        Remove proxy"
-            echo "    $(_green "set") [name] version <ver|latest>  Change Claude version"
+            echo "    $(_green "create") <name> [-p proxy] [-d server_ip] [-t token] [-c ver]"
+            echo "    $(_green "set") [name] proxy <url>             Set proxy"
+            echo "    $(_green "set") [name] proxy --remove          Remove proxy"
+            echo "    $(_green "set") [name] dns_server <ip[:port]>  Set DNS server"
+            echo "    $(_green "set") [name] token <value>           Set token"
+            echo "    $(_green "set") [name] version <ver|latest>    Change Claude version"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
