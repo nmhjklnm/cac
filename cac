@@ -1580,7 +1580,7 @@ _env_cmd_create() {
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
             --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2
                          [[ "$telemetry_mode" =~ ^(off|conservative|aggressive)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use off, conservative, or aggressive)" ;;
-            --clone)     clone_source="${2:-host}"; shift; [[ "${1:-}" != -* ]] && [[ -n "${1:-}" ]] && shift || true ;;
+            --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
             *)           [[ -z "$name" ]] && name="$1" || _die "extra argument: $1"; shift ;;
