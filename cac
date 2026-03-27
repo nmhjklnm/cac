@@ -1178,10 +1178,13 @@ export PATH="$CAC_DIR/shim-bin:$PATH"
 _telemetry_mode="conservative"
 [[ -f "$_env_dir/telemetry_mode" ]] && _telemetry_mode=$(tr -d '[:space:]' < "$_env_dir/telemetry_mode")
 
-# Conservative mode: disable non-essential traffic only (looks like corporate bandwidth saving)
-# Aggressive mode: full 12-layer telemetry kill (maximum privacy, potentially detectable)
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+# off: no telemetry intervention at all
+# conservative: disable non-essential traffic only (looks like corporate bandwidth saving)
+# aggressive: full 12-layer telemetry kill (maximum privacy, potentially detectable)
+if [[ "$_telemetry_mode" != "off" ]]; then
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+fi
 
 if [[ "$_telemetry_mode" == "aggressive" ]]; then
     # Layer 1: Claude Code native toggle
@@ -1575,7 +1578,8 @@ _env_cmd_create() {
             -p|--proxy)  [[ $# -ge 2 ]] || _die "$1 requires a value"; proxy="$2"; shift 2 ;;
             -c|--claude) [[ $# -ge 2 ]] || _die "$1 requires a value"; claude_ver="$2"; shift 2 ;;
             --type)      [[ $# -ge 2 ]] || _die "$1 requires a value"; env_type="$2"; shift 2 ;;
-            --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2 ;;
+            --telemetry) [[ $# -ge 2 ]] || _die "$1 requires a value"; telemetry_mode="$2"; shift 2
+                         [[ "$telemetry_mode" =~ ^(off|conservative|aggressive)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use off, conservative, or aggressive)" ;;
             --clone)     clone_source="${2:-host}"; shift; [[ "${1:-}" != -* ]] && [[ -n "${1:-}" ]] && shift || true ;;
             --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
@@ -2238,7 +2242,9 @@ cmd_check() {
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
     local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
-    if [[ "$telemetry_mode" == "aggressive" ]]; then
+    if [[ "$telemetry_mode" == "off" ]]; then
+        echo "    $(_dim "○") telemetry  off (no protection)"
+    elif [[ "$telemetry_mode" == "aggressive" ]]; then
         local env_vars=(
             "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
             "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
@@ -2426,6 +2432,9 @@ cmd_check() {
         echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
         echo "  $(_bold "Telemetry") ($telemetry_mode mode)"
+        if [[ "$telemetry_mode" == "off" ]]; then
+            echo "    $(_dim "  no telemetry protection active")"
+        fi
         local verbose_vars=(
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
         )

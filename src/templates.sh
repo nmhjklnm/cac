@@ -229,10 +229,13 @@ export PATH="$CAC_DIR/shim-bin:$PATH"
 _telemetry_mode="conservative"
 [[ -f "$_env_dir/telemetry_mode" ]] && _telemetry_mode=$(tr -d '[:space:]' < "$_env_dir/telemetry_mode")
 
-# Conservative mode: disable non-essential traffic only (looks like corporate bandwidth saving)
-# Aggressive mode: full 12-layer telemetry kill (maximum privacy, potentially detectable)
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+# off: no telemetry intervention at all
+# conservative: disable non-essential traffic only (looks like corporate bandwidth saving)
+# aggressive: full 12-layer telemetry kill (maximum privacy, potentially detectable)
+if [[ "$_telemetry_mode" != "off" ]]; then
+    export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=
+fi
 
 if [[ "$_telemetry_mode" == "aggressive" ]]; then
     # Layer 1: Claude Code native toggle

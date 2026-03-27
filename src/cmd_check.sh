@@ -52,7 +52,9 @@ cmd_check() {
     local wrapper_content=""
     [[ -f "$wrapper_file" ]] && wrapper_content=$(<"$wrapper_file")
     local telemetry_mode; telemetry_mode=$(_read "$env_dir/telemetry_mode" "conservative")
-    if [[ "$telemetry_mode" == "aggressive" ]]; then
+    if [[ "$telemetry_mode" == "off" ]]; then
+        echo "    $(_dim "○") telemetry  off (no protection)"
+    elif [[ "$telemetry_mode" == "aggressive" ]]; then
         local env_vars=(
             "CLAUDE_CODE_ENABLE_TELEMETRY" "DO_NOT_TRACK"
             "OTEL_SDK_DISABLED" "OTEL_TRACES_EXPORTER" "OTEL_METRICS_EXPORTER" "OTEL_LOGS_EXPORTER"
@@ -240,6 +242,9 @@ cmd_check() {
         echo "    $(_dim "env")        ${env_dir/#$HOME/~}/.claude/"
         echo
         echo "  $(_bold "Telemetry") ($telemetry_mode mode)"
+        if [[ "$telemetry_mode" == "off" ]]; then
+            echo "    $(_dim "  no telemetry protection active")"
+        fi
         local verbose_vars=(
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
         )
