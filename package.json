@@ -39,7 +39,11 @@
   "bugs": {
     "url": "https://github.com/nmhjklnm/cac/issues"
   },
-  "os": ["darwin", "linux", "win32"],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
   "engines": {
     "node": ">=14.0.0"
   }

@@ -1321,6 +1321,8 @@ fi
 
 # cleanup function
 _cleanup_all() {
+    # stop watchdog
+    [[ -n "${_watchdog_pid:-}" ]] && kill "$_watchdog_pid" 2>/dev/null || true
     # cleanup relay
     if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
         local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
@@ -1330,6 +1332,26 @@ _cleanup_all() {
 }
 
 trap _cleanup_all EXIT INT TERM
+
+# ── Relay watchdog: auto-restart relay if it crashes ──
+if [[ "$_relay_active" == "true" ]]; then
+    (while true; do
+        sleep 10
+        [[ -f "$_relay_pid_file" ]] || break  # pid file gone = intentional shutdown
+        _wpid=$(tr -d '[:space:]' < "$_relay_pid_file" 2>/dev/null) || break
+        if ! kill -0 "$_wpid" 2>/dev/null; then
+            echo "[cac] relay crashed, restarting..." >&2
+            node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
+            disown
+            for _wi in {1..30}; do
+                (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
+                sleep 0.1
+            done
+        fi
+    done) &
+    _watchdog_pid=$!
+    disown
+fi
 
 # ── Concurrent session check ──
 _max_sessions=10
