@@ -42,6 +42,12 @@ if (home && fs.existsSync(wrapperPath)) {
     if (patched.indexOf(buggyPgrep) !== -1 && patched.indexOf(fixedPgrep) === -1) {
       patched = patched.replace(buggyPgrep, fixedPgrep);
     }
+    // Fix: session exit killed the shared relay, breaking all other sessions.
+    // Remove the trap so _cleanup_all never fires on exit.
+    var buggyTrap = 'trap _cleanup_all EXIT INT TERM';
+    if (patched.indexOf(buggyTrap) !== -1) {
+      patched = patched.replace(buggyTrap, '');
+    }
     if (patched !== wrapperContent) {
       fs.writeFileSync(wrapperPath, patched);
     }

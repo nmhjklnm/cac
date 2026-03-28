@@ -1280,21 +1280,38 @@ fi
 [[ -x "$_real" ]] || { echo "[cac] error: claude not found, run 'cac claude install latest'" >&2; exit 1; }
 
 # ── Relay local forwarding (always enabled when proxy is set) ──
+# Relay lifecycle: ENVIRONMENT-level, not session-level.
+# - Started on demand by the first session that needs it
+# - Persists across sessions (no cleanup on exit)
+# - Restarted if proxy changes (relay.proxy mismatch)
+# - Stopped by: cac env activate (switch), cac self delete, or machine reboot
 _relay_active=false
 if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     _relay_js="$CAC_DIR/relay.js"
     _relay_pid_file="$CAC_DIR/relay.pid"
     _relay_port_file="$CAC_DIR/relay.port"
+    _relay_proxy_file="$CAC_DIR/relay.proxy"
 
     # check if relay is already running
     _relay_running=false
     if [[ -f "$_relay_pid_file" ]]; then
         _rpid=$(tr -d '[:space:]' < "$_relay_pid_file")
-        kill -0 "$_rpid" 2>/dev/null && _relay_running=true
+        [[ -n "$_rpid" ]] && kill -0 "$_rpid" 2>/dev/null && _relay_running=true
+    fi
+
+    # kill stale relay if proxy changed (env switch without going through cac activate)
+    # skip if relay.proxy absent (first run after upgrade — assume match)
+    if [[ "$_relay_running" == "true" ]] && [[ -f "$_relay_proxy_file" ]]; then
+        _old_proxy=$(tr -d '[:space:]' < "$_relay_proxy_file")
+        if [[ "$_old_proxy" != "$PROXY" ]]; then
+            kill "$_rpid" 2>/dev/null || true
+            rm -f "$_relay_pid_file" "$_relay_port_file" "$_relay_proxy_file"
+            _relay_running=false
+        fi
     fi
 
     # start if not running
-    if [[ "$_relay_running" != "true" ]] && [[ -f "$_relay_js" ]]; then
+    if [[ "$_relay_running" != "true" ]]; then
         _rport=17890
         while (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null; do
             (( _rport++ ))
@@ -1306,6 +1323,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
             (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
             sleep 0.1
         done
+        echo "$PROXY" > "$_relay_proxy_file"
         echo "$_rport" > "$_relay_port_file"
     fi
 
@@ -1317,40 +1335,6 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         export ALL_PROXY="http://127.0.0.1:$_rport"
         _relay_active=true
     fi
-fi
-
-# cleanup function
-_cleanup_all() {
-    # stop watchdog
-    [[ -n "${_watchdog_pid:-}" ]] && kill "$_watchdog_pid" 2>/dev/null || true
-    # cleanup relay
-    if [[ "$_relay_active" == "true" ]] && [[ -f "$CAC_DIR/relay.pid" ]]; then
-        local _p; _p=$(cat "$CAC_DIR/relay.pid" 2>/dev/null) || true
-        [[ -n "$_p" ]] && kill "$_p" 2>/dev/null || true
-        rm -f "$CAC_DIR/relay.pid" "$CAC_DIR/relay.port"
-    fi
-}
-
-trap _cleanup_all EXIT INT TERM
-
-# ── Relay watchdog: auto-restart relay if it crashes ──
-if [[ "$_relay_active" == "true" ]]; then
-    (while true; do
-        sleep 10
-        [[ -f "$_relay_pid_file" ]] || break  # pid file gone = intentional shutdown
-        _wpid=$(tr -d '[:space:]' < "$_relay_pid_file" 2>/dev/null) || break
-        if ! kill -0 "$_wpid" 2>/dev/null; then
-            echo "[cac] relay crashed, restarting..." >&2
-            node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >>"$CAC_DIR/relay.log" 2>&1 &
-            disown
-            for _wi in {1..30}; do
-                (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
-                sleep 0.1
-            done
-        fi
-    done) &
-    _watchdog_pid=$!
-    disown
 fi
 
 # ── Concurrent session check ──
@@ -1370,7 +1354,6 @@ set +e
 "$_real" "$@"
 _ec=$?
 set -e
-_cleanup_all
 exit "$_ec"
 WRAPPER_EOF
     local _tmp="$CAC_DIR/bin/claude.tmp"
@@ -1997,6 +1980,7 @@ _relay_start() {
         return 1
     fi
 
+    echo "$proxy" > "$CAC_DIR/relay.proxy"
     echo "$port" > "$CAC_DIR/relay.port"
     return 0
 }
@@ -2016,7 +2000,7 @@ _relay_stop() {
         fi
         rm -f "$pid_file"
     fi
-    rm -f "$CAC_DIR/relay.port"
+    rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
 
     # cleanup route
     _relay_remove_route 2>/dev/null || true
