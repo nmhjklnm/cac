@@ -35,6 +35,7 @@ _relay_start() {
         return 1
     fi
 
+    echo "$proxy" > "$CAC_DIR/relay.proxy"
     echo "$port" > "$CAC_DIR/relay.port"
     return 0
 }
@@ -54,7 +55,7 @@ _relay_stop() {
         fi
         rm -f "$pid_file"
     fi
-    rm -f "$CAC_DIR/relay.port"
+    rm -f "$CAC_DIR/relay.port" "$CAC_DIR/relay.proxy"
 
     # cleanup route
     _relay_remove_route 2>/dev/null || true
