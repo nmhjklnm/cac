@@ -45,7 +45,7 @@ _relay_stop() {
     if [[ -f "$pid_file" ]]; then
         local pid; pid=$(tr -d '[:space:]' < "$pid_file")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
+            kill "$pid" 2>/dev/null || true
             # wait for process exit
             local _i
             for _i in {1..20}; do

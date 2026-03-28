@@ -105,9 +105,9 @@ _check_mtls() {
     if openssl verify -CAfile "$ca_cert" "$client_cert" >/dev/null 2>&1; then
         # check certificate expiry
         local expiry
-        expiry=$(openssl x509 -in "$client_cert" -noout -enddate 2>/dev/null | cut -d= -f2)
+        expiry=$(openssl x509 -in "$client_cert" -noout -enddate 2>/dev/null | cut -d= -f2 || true)
         local cn
-        cn=$(openssl x509 -in "$client_cert" -noout -subject 2>/dev/null | sed 's/.*CN *= *//')
+        cn=$(openssl x509 -in "$client_cert" -noout -subject 2>/dev/null | sed 's/.*CN *= *//' || true)
         echo "$(_green "✓") mTLS certificate valid (CN=$cn, expires: $expiry)"
         return 0
     else

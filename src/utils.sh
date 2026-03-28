@@ -42,12 +42,12 @@ _gen_uuid() {
     elif [[ -f /proc/sys/kernel/random/uuid ]]; then
         cat /proc/sys/kernel/random/uuid
     else
-        python3 -c "import uuid; print(uuid.uuid4())"
+        python3 -c "import uuid; print(uuid.uuid4())" || _die "python3 required for UUID generation (install python3 or uuidgen)"
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
 _new_sid()     { _gen_uuid | tr '[:upper:]' '[:lower:]'; }
-_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())"; }
+_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }

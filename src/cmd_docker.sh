@@ -107,7 +107,8 @@ _dk_detect_network() {
     return 1
   fi
 
-  addr=$(ip -4 addr show "$iface" | awk '/inet /{print $2; exit}')
+  addr=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2; exit}') || addr=""
+  [[ -z "$addr" ]] && { echo "error: cannot get address for $iface" >&2; return 1; }
   ip="${addr%/*}"
   prefix="${addr#*/}"
 

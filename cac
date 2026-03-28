@@ -52,12 +52,12 @@ _gen_uuid() {
     elif [[ -f /proc/sys/kernel/random/uuid ]]; then
         cat /proc/sys/kernel/random/uuid
     else
-        python3 -c "import uuid; print(uuid.uuid4())"
+        python3 -c "import uuid; print(uuid.uuid4())" || _die "python3 required for UUID generation (install python3 or uuidgen)"
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
 _new_sid()     { _gen_uuid | tr '[:upper:]' '[:lower:]'; }
-_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())"; }
+_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
@@ -921,9 +921,9 @@ _check_mtls() {
     if openssl verify -CAfile "$ca_cert" "$client_cert" >/dev/null 2>&1; then
         # check certificate expiry
         local expiry
-        expiry=$(openssl x509 -in "$client_cert" -noout -enddate 2>/dev/null | cut -d= -f2)
+        expiry=$(openssl x509 -in "$client_cert" -noout -enddate 2>/dev/null | cut -d= -f2 || true)
         local cn
-        cn=$(openssl x509 -in "$client_cert" -noout -subject 2>/dev/null | sed 's/.*CN *= *//')
+        cn=$(openssl x509 -in "$client_cert" -noout -subject 2>/dev/null | sed 's/.*CN *= *//' || true)
         echo "$(_green "✓") mTLS certificate valid (CN=$cn, expires: $expiry)"
         return 0
     else
@@ -1480,7 +1480,7 @@ _ensure_initialized() {
     if [[ -n "$_cac_bin" ]] && [[ -L "$_cac_bin" ]]; then
         local _link; _link="$(readlink "$_cac_bin")"
         [[ "$_link" != /* ]] && _link="$(dirname "$_cac_bin")/$_link"
-        _self_dir="$(cd "$(dirname "$_link")" && pwd)"
+        _self_dir="$(cd "$(dirname "$_link")" 2>/dev/null && pwd)" || _self_dir=""
     fi
     # Fallback: directory of the running script
     if [[ -z "$_self_dir" ]] || [[ ! -f "$_self_dir/relay.js" ]]; then
@@ -1577,7 +1577,7 @@ _env_cmd_create() {
         if [[ ! "$proxy" =~ ^(http|https|socks5):// ]]; then
             printf "  $(_dim "Detecting proxy protocol ...") "
             if proxy_url=$(_auto_detect_proxy "$proxy"); then
-                echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
+                echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+' || echo "http")")"
             else
                 echo "$(_yellow "failed, defaulting to http")"
             fi
@@ -1883,7 +1883,7 @@ _env_cmd_set() {
                 if [[ ! "$value" =~ ^(http|https|socks5):// ]]; then
                     printf "  $(_dim "Detecting proxy protocol ...") "
                     if proxy_url=$(_auto_detect_proxy "$value"); then
-                        echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
+                        echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+' || echo "http")")"
                     else
                         echo "$(_yellow "failed, defaulting to http")"
                     fi
@@ -1990,7 +1990,7 @@ _relay_stop() {
     if [[ -f "$pid_file" ]]; then
         local pid; pid=$(tr -d '[:space:]' < "$pid_file")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
+            kill "$pid" 2>/dev/null || true
             # wait for process exit
             local _i
             for _i in {1..20}; do
@@ -2381,7 +2381,7 @@ cmd_check() {
 
     # ── summary ──
     echo
-    if [[ ${#problems[@]} -eq 0 ]]; then
+    if [[ ${#problems[@]:-0} -eq 0 ]]; then
         echo "  $(_green "✓") all good"
     else
         for p in "${problems[@]}"; do
@@ -2770,7 +2770,8 @@ _dk_detect_network() {
     return 1
   fi
 
-  addr=$(ip -4 addr show "$iface" | awk '/inet /{print $2; exit}')
+  addr=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2; exit}') || addr=""
+  [[ -z "$addr" ]] && { echo "error: cannot get address for $iface" >&2; return 1; }
   ip="${addr%/*}"
   prefix="${addr#*/}"
 

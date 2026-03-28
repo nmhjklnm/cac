@@ -37,7 +37,7 @@ _env_cmd_create() {
         if [[ ! "$proxy" =~ ^(http|https|socks5):// ]]; then
             printf "  $(_dim "Detecting proxy protocol ...") "
             if proxy_url=$(_auto_detect_proxy "$proxy"); then
-                echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
+                echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+' || echo "http")")"
             else
                 echo "$(_yellow "failed, defaulting to http")"
             fi
@@ -343,7 +343,7 @@ _env_cmd_set() {
                 if [[ ! "$value" =~ ^(http|https|socks5):// ]]; then
                     printf "  $(_dim "Detecting proxy protocol ...") "
                     if proxy_url=$(_auto_detect_proxy "$value"); then
-                        echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+')")"
+                        echo "$(_cyan "$(echo "$proxy_url" | grep -oE '^[a-z]+' || echo "http")")"
                     else
                         echo "$(_yellow "failed, defaulting to http")"
                     fi

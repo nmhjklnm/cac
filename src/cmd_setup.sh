@@ -13,7 +13,7 @@ _ensure_initialized() {
     if [[ -n "$_cac_bin" ]] && [[ -L "$_cac_bin" ]]; then
         local _link; _link="$(readlink "$_cac_bin")"
         [[ "$_link" != /* ]] && _link="$(dirname "$_cac_bin")/$_link"
-        _self_dir="$(cd "$(dirname "$_link")" && pwd)"
+        _self_dir="$(cd "$(dirname "$_link")" 2>/dev/null && pwd)" || _self_dir=""
     fi
     # Fallback: directory of the running script
     if [[ -z "$_self_dir" ]] || [[ ! -f "$_self_dir/relay.js" ]]; then

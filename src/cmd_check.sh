@@ -222,7 +222,7 @@ cmd_check() {
 
     # ── summary ──
     echo
-    if [[ ${#problems[@]} -eq 0 ]]; then
+    if [[ ${#problems[@]:-0} -eq 0 ]]; then
         echo "  $(_green "✓") all good"
     else
         for p in "${problems[@]}"; do
