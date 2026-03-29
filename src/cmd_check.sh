@@ -4,7 +4,13 @@ cmd_check() {
     _require_setup
 
     local verbose=false
-    [[ "${1:-}" == "-d" || "${1:-}" == "--detail" ]] && verbose=true
+    local json_mode=false
+    for arg in "$@"; do
+        case "$arg" in
+            -d|--detail) verbose=true ;;
+            --json)      json_mode=true ;;
+        esac
+    done
 
     local current; current=$(_current_env)
 
@@ -28,23 +34,39 @@ cmd_check() {
 
     local problems=()
 
+    # ── JSON state variables (populated alongside display checks) ──
+    local j_wrapper_active=false
+    local j_telemetry_blocked=false
+    local j_fingerprint_hook=false
+    local j_dns_guard=false
+    local j_proxy_reachable=false
+    local j_proxy_masked=""
+    local j_proxy_exit_ip=""
+    local j_relay_active=false
+    local j_relay_port=""
+
     # ── header (neutral, no pass/fail yet) ──
-    echo
-    echo "  $(_bold "$current") $(_dim "(claude $ver)")"
-    echo
+    if [[ "$json_mode" == "false" ]]; then
+        echo
+        echo "  $(_bold "$current") $(_dim "(claude $ver)")"
+        echo
+    fi
 
     # ── wrapper check (instant) ──
     local claude_path; claude_path="$(command -v claude 2>/dev/null || true)"
     if [[ -z "$claude_path" ]] || [[ "$claude_path" != *"/.cac/bin/claude" ]]; then
         local _rc; _rc=$(_detect_rc_file)
         if [[ -n "$_rc" ]] && grep -q '# >>> cac' "$_rc" 2>/dev/null; then
-            echo "    $(_green "✓") wrapper    configured in ${_rc/#$HOME/~}"
+            [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") wrapper    configured in ${_rc/#$HOME/~}"
+            j_wrapper_active=true
         else
             _write_path_to_rc "$_rc" >/dev/null 2>&1 || true
-            echo "    $(_green "✓") wrapper    $(_dim "added to ${_rc/#$HOME/~}")"
+            [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") wrapper    $(_dim "added to ${_rc/#$HOME/~}")"
+            j_wrapper_active=true
         fi
     else
-        echo "    $(_green "✓") wrapper    active"
+        [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") wrapper    active"
+        j_wrapper_active=true
     fi
 
     # ── telemetry shield (instant) ──
@@ -61,16 +83,18 @@ cmd_check() {
         "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA"
     )
     if [[ "$telemetry_mode" == "off" ]]; then
-        echo "    $(_dim "○") telemetry  off (no protection)"
+        [[ "$json_mode" == "false" ]] && echo "    $(_dim "○") telemetry  off (no protection)"
+        j_telemetry_blocked=false
     elif [[ "$telemetry_mode" == "aggressive" ]]; then
         local env_ok=0 env_total=${#_tel_aggressive_vars[@]}
         for var in "${_tel_aggressive_vars[@]}"; do
             [[ "$wrapper_content" == *"$var"* ]] && (( env_ok++ )) || true
         done
         if [[ "$env_ok" -eq "$env_total" ]]; then
-            echo "    $(_green "✓") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            j_telemetry_blocked=true
         else
-            echo "    $(_red "✗") telemetry  aggressive ${env_ok}/${env_total} blocked"
+            [[ "$json_mode" == "false" ]] && echo "    $(_red "✗") telemetry  aggressive ${env_ok}/${env_total} blocked"
             problems+=("telemetry shield ${env_ok}/${env_total}")
         fi
     else
@@ -79,9 +103,10 @@ cmd_check() {
             [[ "$wrapper_content" == *"$var"* ]] && (( cons_ok++ )) || true
         done
         if [[ "$cons_ok" -eq 2 ]]; then
-            echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
+            [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") telemetry  conservative (non-essential blocked)"
+            j_telemetry_blocked=true
         else
-            echo "    $(_red "✗") telemetry  conservative ($cons_ok/2)"
+            [[ "$json_mode" == "false" ]] && echo "    $(_red "✗") telemetry  conservative ($cons_ok/2)"
             problems+=("telemetry shield incomplete")
         fi
     fi
@@ -93,12 +118,16 @@ cmd_check() {
         actual_hn=$(NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js" CAC_HOSTNAME="$expected_hn" \
             node -e "process.stdout.write(require('os').hostname())" 2>/dev/null || true)
         if [[ "$actual_hn" == "$expected_hn" ]]; then
-            echo "    $(_green "✓") fingerprint spoofed ($(_dim "$expected_hn"))"
+            [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") fingerprint spoofed ($(_dim "$expected_hn"))"
+            j_fingerprint_hook=true
         else
-            echo "    $(_red "✗") fingerprint NOT spoofed (got: $actual_hn)"
+            [[ "$json_mode" == "false" ]] && echo "    $(_red "✗") fingerprint NOT spoofed (got: $actual_hn)"
             problems+=("fingerprint hook not working")
         fi
     fi
+
+    # ── DNS guard ──
+    [[ -f "$CAC_DIR/cac-dns-guard.js" ]] && j_dns_guard=true
 
     # ── IPv6 leak detection ──
     local os; os=$(_detect_os)
@@ -112,14 +141,16 @@ cmd_check() {
         ipv6_addrs=$(ip -6 addr show scope global 2>/dev/null | grep -c "inet6" || true)
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
-    if [[ "$ipv6_leak" == "true" ]]; then
-        echo "    $(_yellow "⚠") IPv6      global address detected (potential leak)"
-    else
-        echo "    $(_green "✓") IPv6      no global address"
+    if [[ "$json_mode" == "false" ]]; then
+        if [[ "$ipv6_leak" == "true" ]]; then
+            echo "    $(_yellow "⚠") IPv6      global address detected (potential leak)"
+        else
+            echo "    $(_green "✓") IPv6      no global address"
+        fi
     fi
 
     # ── residual telemetry files ──
-    if [[ -d "$HOME/.claude/telemetry" ]]; then
+    if [[ "$json_mode" == "false" ]] && [[ -d "$HOME/.claude/telemetry" ]]; then
         local tel_files
         tel_files=$(find "$HOME/.claude/telemetry" -type f 2>/dev/null | wc -l | tr -d ' ')
         if [[ "$tel_files" -gt 0 ]]; then
@@ -132,43 +163,60 @@ cmd_check() {
     local _claude_count
     _claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
-    if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
+    if [[ "$json_mode" == "false" ]] && [[ "$_claude_count" -gt "$_max_sessions" ]]; then
         echo "    $(_yellow "⚠") sessions  $_claude_count running (threshold: $_max_sessions)"
     fi
 
     # ── network check (slow — streaming output) ──
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
+        # Mask credentials in proxy URL for JSON output
+        j_proxy_masked=$(echo "$proxy" | sed 's|://[^@]*@|://***@|')
+
         if ! _proxy_reachable "$proxy"; then
-            echo "    $(_red "✗") proxy      unreachable"
+            [[ "$json_mode" == "false" ]] && echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
         else
-            # Fast retry with dots: each attempt adds a dot
-            local _ip_url _dots=""
-            local _urls="https://api.ip.sb/ip https://ip.3322.net https://api.ipify.org https://ipinfo.io/ip https://api.ip.sb/ip"
-            for _ip_url in $_urls; do
-                _dots="${_dots}."
-                printf "\r    · exit IP    $(_dim "detecting${_dots}")"
-                proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
-                [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
-                proxy_ip=""
-            done
-            # Overwrite the "detecting..." line
-            if [[ -n "$proxy_ip" ]]; then
-                printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")\033[K\n"
-                # TZ vs exit IP consistency check
-                local env_tz; env_tz=$(_read "$env_dir/tz" "")
-                if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
-                    local ip_tz
-                    ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
-                        python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
-                    if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
-                        echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
-                        problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")
-                    fi
-                fi
+            j_proxy_reachable=true
+            if [[ "$json_mode" == "true" ]]; then
+                # Silent detection in JSON mode
+                local _ip_url
+                local _urls="https://api.ip.sb/ip https://ip.3322.net https://api.ipify.org https://ipinfo.io/ip"
+                for _ip_url in $_urls; do
+                    proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
+                    [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+                    proxy_ip=""
+                done
+                j_proxy_exit_ip="$proxy_ip"
             else
-                printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")\033[K\n"
+                # Fast retry with dots: each attempt adds a dot
+                local _ip_url _dots=""
+                local _urls="https://api.ip.sb/ip https://ip.3322.net https://api.ipify.org https://ipinfo.io/ip https://api.ip.sb/ip"
+                for _ip_url in $_urls; do
+                    _dots="${_dots}."
+                    printf "\r    · exit IP    $(_dim "detecting${_dots}")"
+                    proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
+                    [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+                    proxy_ip=""
+                done
+                j_proxy_exit_ip="$proxy_ip"
+                # Overwrite the "detecting..." line
+                if [[ -n "$proxy_ip" ]]; then
+                    printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")\033[K\n"
+                    # TZ vs exit IP consistency check
+                    local env_tz; env_tz=$(_read "$env_dir/tz" "")
+                    if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
+                        local ip_tz
+                        ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
+                            python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+                        if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
+                            echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
+                            problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")
+                        fi
+                    fi
+                else
+                    printf "\r    $(_green "✓") exit IP    $(_dim "run again to detect exit IP")\033[K\n"
+                fi
             fi
 
             # TUN conflict detection
@@ -194,30 +242,96 @@ cmd_check() {
                 if _relay_is_running 2>/dev/null; then
                     local rport; rport=$(_read "$CAC_DIR/relay.port" "")
                     local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
-                    [[ -n "$relay_ip" ]] && relay_ok=true
+                    if [[ -n "$relay_ip" ]]; then
+                        relay_ok=true
+                        j_relay_active=true
+                        j_relay_port="$rport"
+                    fi
                 elif [[ -f "$CAC_DIR/relay.js" ]]; then
                     local _test_env; _test_env=$(_current_env)
                     if _relay_start "$_test_env" 2>/dev/null; then
                         local rport; rport=$(_read "$CAC_DIR/relay.port" "")
                         local relay_ip; relay_ip=$(curl --proxy "http://127.0.0.1:$rport" --connect-timeout 8 --max-time 12 https://api.ipify.org 2>/dev/null || true)
                         _relay_stop 2>/dev/null || true
-                        [[ -n "$relay_ip" ]] && relay_ok=true
+                        if [[ -n "$relay_ip" ]]; then
+                            relay_ok=true
+                            j_relay_active=true
+                            j_relay_port="$rport"
+                        fi
                     fi
                 fi
 
                 if [[ "$relay_ok" == "true" ]]; then
-                    echo "    $(_green "✓") TUN        relay bypass active"
+                    [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") TUN        relay bypass active"
                 else
                     local proxy_hp; proxy_hp=$(_proxy_host_port "$proxy")
                     local proxy_host="${proxy_hp%%:*}"
-                    echo "    $(_red "✗") TUN        conflict — add DIRECT rule for $proxy_host"
+                    [[ "$json_mode" == "false" ]] && echo "    $(_red "✗") TUN        conflict — add DIRECT rule for $proxy_host"
                     problems+=("TUN conflict: add DIRECT rule for $proxy_host in proxy software")
                 fi
             fi
             fi
         fi
     else
-        echo "    $(_green "✓") mode       API Key (no proxy)"
+        [[ "$json_mode" == "false" ]] && echo "    $(_green "✓") mode       API Key (no proxy)"
+    fi
+
+    # ── JSON output ──
+    if [[ "$json_mode" == "true" ]]; then
+        local j_uuid;      j_uuid=$(_read "$env_dir/uuid" "")
+        local j_hostname;  j_hostname=$(_read "$env_dir/hostname" "")
+        local j_stable_id; j_stable_id=$(_read "$env_dir/stable_id" "")
+        local j_ok=true
+        [[ ${#problems[@]} -gt 0 ]] && j_ok=false
+
+        # Build problems JSON array
+        local j_problems="["
+        local first=true
+        for p in "${problems[@]}"; do
+            $first || j_problems+=","
+            j_problems+="$(printf '%s' "$p" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')"
+            first=false
+        done
+        j_problems+="]"
+
+        # Proxy object
+        local j_proxy_block="null"
+        if [[ -n "$proxy" ]]; then
+            local j_exit_ip_val="null"
+            [[ -n "$j_proxy_exit_ip" ]] && j_exit_ip_val="\"$j_proxy_exit_ip\""
+            j_proxy_block="{\"url\":\"$j_proxy_masked\",\"reachable\":$j_proxy_reachable,\"exit_ip\":$j_exit_ip_val}"
+        fi
+
+        # Relay object
+        local j_relay_block="null"
+        if [[ "$j_relay_active" == "true" ]]; then
+            local j_relay_port_val="null"
+            [[ -n "$j_relay_port" ]] && j_relay_port_val="$j_relay_port"
+            j_relay_block="{\"active\":true,\"port\":$j_relay_port_val}"
+        fi
+
+        python3 -c "
+import json, sys
+print(json.dumps({
+    'ok': $([ "$j_ok" = "true" ] && echo "True" || echo "False"),
+    'env': $(printf '%s' "$current" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+    'claude_version': $(printf '%s' "$ver" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+    'wrapper_active': $([ "$j_wrapper_active" = "true" ] && echo "True" || echo "False"),
+    'telemetry_blocked': $([ "$j_telemetry_blocked" = "true" ] && echo "True" || echo "False"),
+    'fingerprint_hook': $([ "$j_fingerprint_hook" = "true" ] && echo "True" || echo "False"),
+    'dns_guard': $([ "$j_dns_guard" = "true" ] && echo "True" || echo "False"),
+    'ipv6_leak': $([ "$ipv6_leak" = "true" ] && echo "True" || echo "False"),
+    'proxy': $j_proxy_block,
+    'relay': $j_relay_block,
+    'identity': {
+        'uuid': $(printf '%s' "$j_uuid" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+        'hostname': $(printf '%s' "$j_hostname" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+        'stable_id': $(printf '%s' "$j_stable_id" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+    },
+    'problems': $j_problems,
+}, indent=2))
+"
+        return
     fi
 
     # ── summary ──
