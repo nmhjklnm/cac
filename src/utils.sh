@@ -1,7 +1,7 @@
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.1"
+CAC_VERSION="1.5.2-beta.1"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -46,10 +46,23 @@ _gen_uuid() {
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
-_new_sid()     { _gen_uuid | tr '[:upper:]' '[:lower:]'; }
 _new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
-_new_hostname() { echo "host-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')"; }
+_new_hostname() {
+    local -a _first_names=(
+        "James" "John" "Robert" "Michael" "William" "David" "Richard" "Joseph"
+        "Thomas" "Charles" "Daniel" "Matthew" "Anthony" "Donald" "Mark" "Paul"
+        "Steven" "Andrew" "Kenneth" "Joshua" "Kevin" "Brian" "George" "Timothy"
+        "Emma" "Olivia" "Sophia" "Isabella" "Mia" "Charlotte" "Amelia" "Harper"
+        "Evelyn" "Abigail" "Emily" "Elizabeth" "Sofia" "Avery" "Ella" "Scarlett"
+        "Liam" "Noah" "Oliver" "Elijah" "Lucas" "Mason" "Ethan" "Aiden"
+        "Alex" "Ryan" "Tyler" "Jordan" "Taylor" "Morgan" "Casey" "Riley"
+    )
+    local -a _models=("MacBook-Pro" "MacBook-Air" "MacBook-Pro" "MacBook-Pro")
+    local _name="${_first_names[$((RANDOM % ${#_first_names[@]}))]}"
+    local _model="${_models[$((RANDOM % ${#_models[@]}))]}"
+    echo "${_name}s-${_model}.local"
+}
 _new_mac() { printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)); }
 _new_git_remote() { echo "https://github.com/user-$(_gen_uuid | cut -d- -f1)/project-$(_gen_uuid | cut -d- -f2).git"; }
 _new_git_email() { echo "user-$(_gen_uuid | cut -d- -f1 | tr '[:upper:]' '[:lower:]')@users.noreply.github.com"; }
@@ -369,20 +382,6 @@ _remove_path_from_rc() {
         rm -f "$tmp"
         echo "  ✓ Removed PATH config from $rc_file (old format)"
         return 0
-    fi
-}
-
-_update_statsig() {
-    local sid="$1"
-    local config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    local statsig="$config_dir/statsig"
-    [[ -d "$statsig" ]] || return 0
-    local found=false
-    for f in "$statsig"/statsig.stable_id.*; do
-        [[ -f "$f" ]] && { printf '"%s"' "$sid" > "$f"; found=true; }
-    done
-    if [[ "$found" == "false" ]]; then
-        printf '"%s"' "$sid" > "$statsig/statsig.stable_id.local"
     fi
 }
 

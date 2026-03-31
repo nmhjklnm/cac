@@ -99,9 +99,57 @@ if (fakeMachineId) {
 
 // --- Repository fingerprint (rh) interception ---
 // Claude Code computes rh = SHA256(normalized_git_remote_url).hex.slice(0,16)
-// and sends it with every 1p_event — cross-account linkage vector
+// and sends it with every 1p_event — cross-account linkage vector.
+//
+// CC 2.1.88 reads the remote URL via gitFilesystem.ts which calls
+// fs.readFileSync('.git/config') directly — NOT via git subprocess.
+// We intercept both paths for defense in depth.
 const fakeGitRemote = process.env.CAC_FAKE_GIT_REMOTE;
 if (fakeGitRemote) {
+  // Path 1: intercept .git/config reads (primary path in CC 2.1.88)
+  // Replaces the [remote "origin"] url line with our fake remote URL.
+  function isGitConfigPath(p) {
+    var s = typeof p === 'string' ? p : (p && p.toString ? p.toString() : '');
+    return s === '.git/config' || s.endsWith('/.git/config') || s.endsWith('\\.git\\config');
+  }
+  function patchGitConfig(content) {
+    var str = typeof content === 'string' ? content : content.toString('utf8');
+    // Replace url = <anything> under [remote "origin"] section
+    str = str.replace(
+      /(\[remote\s+"origin"\][^\[]*?url\s*=\s*)[^\n]*/,
+      '$1' + fakeGitRemote
+    );
+    return str;
+  }
+
+  // Patch readFileSync (sync path used by gitFilesystem.ts)
+  var _origReadFileSyncRh = fs.readFileSync;
+  fs.readFileSync = function(path, options) {
+    var result = _origReadFileSyncRh.apply(fs, arguments);
+    if (isGitConfigPath(path)) {
+      var patched = patchGitConfig(result);
+      return fakeResult(options, patched);
+    }
+    return result;
+  };
+
+  // Patch fs.promises.readFile (async path)
+  try {
+    var fspRh = require('fs').promises || require('fs/promises');
+    if (fspRh && fspRh.readFile) {
+      var _origPromiseReadFileRh = fspRh.readFile.bind(fspRh);
+      fspRh.readFile = function(path, options) {
+        if (isGitConfigPath(path)) {
+          return _origPromiseReadFileRh(path, options).then(function(content) {
+            return fakeResult(options, patchGitConfig(content));
+          });
+        }
+        return _origPromiseReadFileRh(path, options);
+      };
+    }
+  } catch (_) {}
+
+  // Path 2: intercept git subprocess calls (fallback / older CC versions)
   const GIT_REMOTE_PATTERNS = [
     /git\s+remote\s+get-url/i,
     /git\s+remote\s+-v/i,

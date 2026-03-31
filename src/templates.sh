@@ -216,19 +216,6 @@ if [[ -n "$PROXY" ]]; then
     fi
 fi
 
-# inject statsig stable_id
-if [[ -f "$_env_dir/stable_id" ]]; then
-    _sid=$(tr -d '[:space:]' < "$_env_dir/stable_id")
-    _config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    if [[ -d "$_config_dir/statsig" ]]; then
-        _sid_found=false
-        for _f in "$_config_dir/statsig"/statsig.stable_id.*; do
-            [[ -f "$_f" ]] && { printf '"%s"' "$_sid" > "$_f"; _sid_found=true; }
-        done
-        [[ "$_sid_found" == "false" ]] && printf '"%s"' "$_sid" > "$_config_dir/statsig/statsig.stable_id.local"
-    fi
-fi
-
 # inject env vars — proxy (only when proxy is configured)
 if [[ -n "$PROXY" ]]; then
     export _CAC_PROXY="$PROXY"
@@ -313,6 +300,13 @@ fi
 # ── persona (Docker/server environment spoofing) ──
 if [[ -f "$_env_dir/persona" ]]; then
     _persona=$(tr -d '[:space:]' < "$_env_dir/persona")
+    # Clear all high-priority detectTerminal() variables before injecting persona,
+    # so real env vars from the host (e.g. CURSOR_TRACE_ID in Cursor) don't override.
+    unset CURSOR_TRACE_ID VSCODE_GIT_ASKPASS_MAIN TERMINAL_EMULATOR VisualStudioVersion
+    unset ITERM_SESSION_ID TERM_PROGRAM __CFBundleIdentifier
+    unset TMUX STY KONSOLE_VERSION GNOME_TERMINAL_SERVICE XTERM_VERSION VTE_VERSION
+    unset TERMINATOR_UUID KITTY_WINDOW_ID ALACRITTY_LOG TILIX_ID WT_SESSION
+    unset MSYSTEM ConEmuANSI ConEmuPID ConEmuTask WSL_DISTRO_NAME
     export TERM="xterm-256color"
     case "$_persona" in
         macos-vscode)
@@ -378,6 +372,7 @@ fi
 [[ -f "$_env_dir/mac_address" ]] && export CAC_MAC=$(tr -d '[:space:]' < "$_env_dir/mac_address")
 [[ -f "$_env_dir/machine_id" ]]  && export CAC_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
+export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
 if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
