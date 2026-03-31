@@ -1,0 +1,68 @@
+---
+title: "Ban risk FAQ"
+description: "What cac protects against, what it doesn't, and what to do if you get banned."
+icon: "shield-exclamation"
+---
+
+## What cac protects
+
+cac operates at the **device fingerprint layer**. Every environment gets:
+
+| Protection | What it does |
+|:---|:---|
+| Hardware UUID isolation | Spoofs `ioreg` / `machine-id` / `wmic` output so each env reports a different UUID |
+| Hostname / MAC isolation | Shell shims + Node.js hooks replace `os.hostname()` and `os.networkInterfaces()` |
+| Telemetry blocking | DNS guard + fetch interception + 12 env-var kill switches stop all reporting to Datadog, 1P event logging, and GrowthBook |
+| Config isolation | Each env has its own `CLAUDE_CONFIG_DIR` — sessions, settings, memory are fully separated |
+| mTLS client certificates | Per-environment client certs for an additional TLS identity layer |
+
+When you run `cac env check`, you can verify all of these are active.
+
+## What cac cannot protect
+
+cac has no visibility into Anthropic's server-side systems. The following are outside its scope:
+
+| Risk factor | Why cac can't help |
+|:---|:---|
+| **OAuth account** | Your login identity is tied to an email / GitHub account. Anthropic can see account history regardless of device fingerprint. |
+| **Payment method** | Credit card BIN, billing address, and fraud signals are evaluated server-side at purchase time. |
+| **IP reputation** | Anthropic and Cloudflare score IPs for fraud, abuse history, and data-center origin. A shared or flagged proxy IP raises risk regardless of fingerprint. |
+| **Usage patterns** | Abnormal request volume, concurrent sessions, or API behavior that triggers abuse detection is a server-side decision. |
+| **Pre-flagged accounts** | Accounts flagged in a previous incident remain flagged. A new cac environment does not reset account history. |
+
+## "I got banned in 15 minutes — cac didn't help"
+
+A ban within minutes of first use is almost always an **account-layer event**, not a fingerprint event. The most common causes:
+
+1. **The account was already flagged** — previous activity or a shared email/payment method is already associated with a policy violation.
+2. **High-risk IP** — the proxy's IP range is flagged as a data-center or abuse-prone ASN. Cloudflare scores JA4 + IP together.
+3. **Payment fraud signal** — the card or billing info triggered Stripe/Anthropic fraud detection at subscription time.
+4. **Rate or policy limit** — the account hit a quota and was blocked, which can look like a ban.
+
+cac's device fingerprint layer was never involved in these decisions. Running `cac env check` and seeing all green means the fingerprint layer is working correctly — the issue is upstream.
+
+## Checklist before concluding cac failed
+
+- [ ] Run `cac env check` — confirm UUID, hostname, MAC, and telemetry status all pass
+- [ ] Check if the proxy IP is a residential or data-center IP (`ipinfo.io`, `scamalytics.com`)
+- [ ] Check if the same payment method was used on a previously banned account
+- [ ] Check if any other device is sharing the same environment (same `CLAUDE_CONFIG_DIR`) or the same proxy simultaneously
+- [ ] Check `cac env check` output for any `WARN` or `FAIL` items
+
+## Shared environments and multi-device use
+
+Running the same cac environment on multiple devices defeats the purpose of isolation:
+
+- The same UUID, hostname, and MAC appear from different IPs — that combination is anomalous and detectable.
+- Concurrent sessions on the same account from different locations are visible server-side regardless of fingerprint.
+
+**Recommendation**: each device should have its own cac environment (`cac env create`). If devices share a proxy, they still appear as different fingerprints — that is the correct setup.
+
+## Reducing account-layer risk
+
+cac cannot change these factors, but you can:
+
+- Use a **residential proxy** rather than a data-center proxy. Residential IPs have lower fraud scores.
+- Use a **dedicated payment method** not linked to any previously flagged account.
+- Avoid sharing an account across many concurrent sessions or devices.
+- Be aware that enabling **"Generate memory from chat history"** (autoDream / extractMemories) triggers extra API calls after every session. This increases token consumption and request frequency — consider whether the increased activity profile is acceptable.

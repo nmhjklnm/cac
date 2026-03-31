@@ -198,6 +198,8 @@ cac docker port 6287 # 端口转发
 
 ### 注意事项
 
+> **封号风险说明**：cac 提供设备指纹层保护（UUID、主机名、MAC、遥测阻断、配置隔离），但**无法影响账号层风险**——包括 OAuth 账号本身、支付方式指纹、IP 信誉评分，以及 Anthropic 的服务端封禁决策。如果你遇到"几分钟内被封"的情况，通常是账号层问题，cac 对此无能为力。详见 [封号风险 FAQ](https://cac.nextmind.space/docs/zh/guides/ban-risk)。
+
 > **代理工具冲突**：如果本地启动了 Clash、Shadowrocket、Surge、sing-box 等代理/VPN 工具，建议在使用 cac 时先关闭。TUN 模式兼容性仍属实验性功能。即使发生冲突，cac 也会自动停止连接（fail-closed），**不会泄露你的真实 IP**。
 
 - **首次登录**：启动 `claude` 后，输入 `/login` 完成 OAuth 授权
@@ -372,6 +374,8 @@ cac docker port 6287 # port forwarding
 Proxy formats: `ip:port:user:pass` (SOCKS5), `ss://...`, `vmess://...`, `vless://...`, `trojan://...`
 
 ### Notes
+
+> **Account ban notice**: cac provides device fingerprint layer protection (UUID, hostname, MAC, telemetry blocking, config isolation), but **cannot affect account-layer risks** — including your OAuth account, payment method fingerprint, IP reputation score, or Anthropic's server-side ban decisions. If you get banned within minutes of use, that is typically an account-layer issue that cac does not address. See the [Ban Risk FAQ](https://cac.nextmind.space/docs/guides/ban-risk) for details.
 
 > **Proxy tool conflicts**: If you have Clash, Shadowrocket, Surge, sing-box or other proxy/VPN tools running locally, turn them off before using cac. TUN-mode compatibility is still experimental. Even if a conflict occurs, cac will fail-closed — **your real IP is never exposed**.
 

@@ -83,7 +83,8 @@
                   "guides/proxy-setup",
                   "guides/api-key-users",
                   "guides/docker-mode",
-                  "guides/migrating"
+                  "guides/migrating",
+                  "guides/ban-risk"
                 ]
               }
             ]
@@ -142,7 +143,8 @@
                   "zh/guides/proxy-setup",
                   "zh/guides/api-key-users",
                   "zh/guides/docker-mode",
-                  "zh/guides/migrating"
+                  "zh/guides/migrating",
+                  "zh/guides/ban-risk"
                 ]
               }
             ]
