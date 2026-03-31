@@ -290,7 +290,7 @@ if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
     esac
     case "${BUN_OPTIONS:-}" in
         *cac-dns-guard.js*) ;;
-        *) export BUN_OPTIONS="${BUN_OPTIONS:-} --preload $CAC_DIR/cac-dns-guard.js" ;;
+        *) export BUN_OPTIONS="${BUN_OPTIONS:-} --preload=$CAC_DIR/cac-dns-guard.js" ;;
     esac
 fi
 # fallback layer: HOSTALIASES (gethostbyname level)
@@ -328,7 +328,7 @@ if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
     esac
     case "${BUN_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
-        *) export BUN_OPTIONS="--preload $CAC_DIR/fingerprint-hook.js ${BUN_OPTIONS:-}" ;;
+        *) export BUN_OPTIONS="--preload=$CAC_DIR/fingerprint-hook.js ${BUN_OPTIONS:-}" ;;
     esac
 fi
 
