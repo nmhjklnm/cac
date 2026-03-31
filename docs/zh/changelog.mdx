@@ -5,6 +5,20 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.1
+<sub>2026-03-31</sub>
+
+**修复：Relay 崩溃无法自动恢复（1.5.0 回归）** — [Issue #49](https://github.com/nmhjklnm/cac/issues/49)
+
+1.5.0 在修复多会话共享 relay 时，把 watchdog 和 EXIT trap 一并删掉了。Relay 进程崩溃后无人重启，session 内出现 **Connection Refused**，只能手动重开才能恢复。
+
+- **环境级 watchdog 单例**（`relay.watchdog.pid`）：跨所有 session 共享，relay 崩溃后 5 秒内自动重启。主动停止 relay 时 watchdog 自动退出，不留孤儿进程。
+- **连通性探测**：watchdog 除进程存活检测外，新增 TCP 端口探测。Relay 进程存活但端口无响应时，同样 kill 重启。
+
+**新增：`cac stop` / `cac env stop`**
+
+完全暂停 cac——claude 以原生模式运行，无代理注入、无指纹伪装、无 CLAUDE_CONFIG_DIR 覆盖。用 `cac <name>` 恢复。排查问题或临时绕过 cac 时使用。
+
 ## v1.5.0
 <sub>2026-03-29</sub>
 

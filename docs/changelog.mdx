@@ -5,6 +5,20 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.1
+<sub>2026-03-31</sub>
+
+**Fix: Relay crash recovery regression** — [Issue #49](https://github.com/nmhjklnm/cac/issues/49)
+
+v1.5.0 removed the relay watchdog along with the EXIT trap, leaving no auto-recovery when the relay process crashes mid-session. Affected users would see **Connection Refused** until manually restarting the session.
+
+- **Env-level watchdog singleton** (`relay.watchdog.pid`): shared across all sessions, auto-restarts relay within 5s of crash. Exits automatically when relay is intentionally stopped — no orphaned processes.
+- **Connectivity check**: watchdog now verifies TCP reachability in addition to process liveness. If the relay port is unresponsive (process alive but frozen), it kills and restarts.
+
+**New: `cac stop` / `cac env stop`**
+
+Pause cac entirely — claude runs natively without any injection (no proxy, no fingerprint spoofing, no CLAUDE_CONFIG_DIR override). Resume with `cac <name>`. Useful when troubleshooting or temporarily bypassing cac.
+
 ## v1.5.0
 <sub>2026-03-29</sub>
 
