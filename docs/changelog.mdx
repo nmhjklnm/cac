@@ -5,6 +5,24 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.2
+<sub>2026-04-01</sub>
+
+**Fix: `sudo cac` corrupts `~/.cac/` file ownership** — [PR #59](https://github.com/nmhjklnm/cac/pull/59)
+
+Running `cac` as root (e.g. `sudo cac <env>`) overwrites hook files (`fingerprint-hook.js`, `cac-dns-guard.js`, etc.) with root-owned copies. Subsequent normal-user runs load the stale root-owned version, causing claude to hang at startup with no error output.
+
+- **Self-healing writes**: `rm -f` before each hook file write — user owns `~/.cac/` directory so can always unlink files in it, even root-owned ones. Next `cac` command automatically replaces any stale root-owned files with the current version.
+- **Readability checks**: wrapper now uses `[[ -r ... ]]` instead of `[[ -f ... ]]` for hook files — skips injection gracefully if a file exists but is unreadable (mode 600), rather than crashing silently.
+- **Root warning**: `_ensure_initialized` now prints a warning when running as root.
+
+**Fix: `user_id mismatch` false positive after `/login`** — [PR #59](https://github.com/nmhjklnm/cac/pull/59)
+
+After OAuth login, Claude Code writes the real account `userID` to `.claude.json`, which `cac env check` flagged as a mismatch against the environment's stored fake ID — confusing and misleading.
+
+- Removed fake `userID` generation on `env create` — the fake ID provided no real protection (`account_uuid` is still sent via OAuth token and cannot be spoofed).
+- `cac env check` now auto-syncs `env/user_id` from `.claude.json` after login instead of reporting an error.
+
 ## v1.5.1
 <sub>2026-03-31</sub>
 
@@ -37,7 +55,7 @@ Based on comprehensive static analysis of Claude Code v2.1.86 (679,353 lines deo
 - **Trusted Device Token** [P1]: `tengu_sessions_elevated_auth_enforcement` gate is currently off but mechanism is ready (stores token in macOS Keychain). Per-environment `CLAUDE_TRUSTED_DEVICE_TOKEN` preemptively overrides. `cac env check` now detects Keychain residuals.
 - **Billing header disabled** [P2]: `CLAUDE_CODE_ATTRIBUTION_HEADER=0` suppresses `x-anthropic-billing-header` (cc_version, cc_entrypoint, cc_workload).
 - **Datadog domain blocked** [P2]: `http-intake.logs.us5.datadoghq.com` added to DNS block list (event dual-write target, 48 whitelisted events only).
-- **metadata.user_id consistency check** [P2]: `cac env check` now verifies `.claude.json` `userID` matches environment file — detects if Claude Code overwrote the spoofed ID on startup.
+- **metadata.user_id tracking** [P2]: `cac env check` tracks the logged-in account `userID` per environment (removed in v1.5.2 — see above).
 
 **New commands**
 

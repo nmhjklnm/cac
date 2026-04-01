@@ -5,6 +5,24 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.2
+<sub>2026-04-01</sub>
+
+**修复：`sudo cac` 导致 `~/.cac/` 文件所有权污染** — [PR #59](https://github.com/nmhjklnm/cac/pull/59)
+
+以 root 身份运行 `cac`（如 `sudo cac <env>`）会将 hook 文件（`fingerprint-hook.js`、`cac-dns-guard.js` 等）覆写为 root 所有的版本。后续普通用户运行时加载的是旧版 root 文件，导致 claude 启动时无任何报错地卡死。
+
+- **自愈写入**：写入 hook 文件前先 `rm -f`——用户拥有 `~/.cac/` 目录的写权限，可以删除其中的 root 所有文件。下次运行任意 `cac` 命令即自动替换为当前版本。
+- **可读性检查**：wrapper 改用 `[[ -r ... ]]` 替代 `[[ -f ... ]]` 检查 hook 文件——文件存在但不可读（mode 600）时优雅跳过，而非 silent crash。
+- **root 警告**：`_ensure_initialized` 以 root 身份运行时打印警告。
+
+**修复：`/login` 后 `user_id mismatch` 误报** — [PR #59](https://github.com/nmhjklnm/cac/pull/59)
+
+OAuth 登录后，Claude Code 将真实账号 `userID` 写入 `.claude.json`，`cac env check` 将其与环境存储的伪造 ID 对比报错——令用户困惑且无实际意义。
+
+- 移除 `env create` 时生成假 `userID` 的逻辑——假 ID 提供的保护极为有限（`account_uuid` 通过 OAuth token 传输，无法伪造）。
+- `cac env check` 现在在登录后自动从 `.claude.json` 同步 `env/user_id`，不再报错。
+
 ## v1.5.1
 <sub>2026-03-31</sub>
 
@@ -37,7 +55,7 @@ description: 版本发布历史和重要变更
 - **Trusted Device Token 预防** [P1]：`tengu_sessions_elevated_auth_enforcement` gate 当前关闭但机制已完备（token 存 macOS Keychain）。每环境 `CLAUDE_TRUSTED_DEVICE_TOKEN` 预防性覆盖。`cac env check` 检测 Keychain 残留。
 - **Billing header 禁用** [P2]：`CLAUDE_CODE_ATTRIBUTION_HEADER=0` 抑制 `x-anthropic-billing-header`。
 - **Datadog 域名拦截** [P2]：`http-intake.logs.us5.datadoghq.com` 加入 DNS 拦截列表。
-- **metadata.user_id 一致性检查** [P2]：`cac env check` 验证 `.claude.json` 的 `userID` 与环境文件一致——检测 Claude Code 是否在启动时覆写了伪造的 ID。
+- **metadata.user_id 追踪** [P2]：`cac env check` 按环境追踪已登录账号的 `userID`（v1.5.2 中行为已调整，见上）。
 
 **新命令**
 
