@@ -11,7 +11,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.2-beta.2"
+CAC_VERSION="1.5.2-beta.3"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -1589,9 +1589,18 @@ _ensure_initialized() {
         echo "[cac] warning: running as root may corrupt ~/.cac/ file ownership" >&2
         echo "[cac] hint: run as your normal user instead" >&2
     fi
-    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js" 2>/dev/null || true
-    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js" 2>/dev/null || true
+    # rm -f first: user owns ~/.cac/ dir so can delete root-owned files even if can't overwrite them
+    if [[ -f "$_self_dir/fingerprint-hook.js" ]]; then
+        rm -f "$CAC_DIR/fingerprint-hook.js" 2>/dev/null || true
+        cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js" 2>/dev/null || true
+    fi
+    if [[ -f "$_self_dir/relay.js" ]]; then
+        rm -f "$CAC_DIR/relay.js" 2>/dev/null || true
+        cp "$_self_dir/relay.js" "$CAC_DIR/relay.js" 2>/dev/null || true
+    fi
+    rm -f "$CAC_DIR/cac-dns-guard.js" 2>/dev/null || true
     _write_dns_guard_js 2>/dev/null || true
+    rm -f "$CAC_DIR/blocked_hosts" 2>/dev/null || true
     _write_blocked_hosts 2>/dev/null || true
 
     # PATH (idempotent — always ensure it's in rc file)
