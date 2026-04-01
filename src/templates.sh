@@ -334,7 +334,9 @@ if [[ -f "$_env_dir/persona" ]]; then
 fi
 
 # ── NS-level DNS interception ──
-if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
+# Use -r (readable) not -f (exists) — root-owned files with mode 600 exist but
+# can't be read by normal user, causing bun/node to crash silently.
+if [[ -r "$CAC_DIR/cac-dns-guard.js" ]]; then
     case "${NODE_OPTIONS:-}" in
         *cac-dns-guard.js*) ;; # already injected, skip
         *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $CAC_DIR/cac-dns-guard.js" ;;
@@ -345,7 +347,7 @@ if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
     esac
 fi
 # fallback layer: HOSTALIASES (gethostbyname level)
-[[ -f "$CAC_DIR/blocked_hosts" ]] && export HOSTALIASES="$CAC_DIR/blocked_hosts"
+[[ -r "$CAC_DIR/blocked_hosts" ]] && export HOSTALIASES="$CAC_DIR/blocked_hosts"
 
 # ── mTLS client certificate ──
 if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; then
@@ -373,7 +375,7 @@ fi
 [[ -f "$_env_dir/machine_id" ]]  && export CAC_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
 export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
-if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
+if [[ -r "$CAC_DIR/fingerprint-hook.js" ]]; then
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
         *) export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}" ;;

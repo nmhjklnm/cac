@@ -11,7 +11,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.2-beta.1"
+CAC_VERSION="1.5.2-beta.2"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -1273,7 +1273,9 @@ if [[ -f "$_env_dir/persona" ]]; then
 fi
 
 # ── NS-level DNS interception ──
-if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
+# Use -r (readable) not -f (exists) — root-owned files with mode 600 exist but
+# can't be read by normal user, causing bun/node to crash silently.
+if [[ -r "$CAC_DIR/cac-dns-guard.js" ]]; then
     case "${NODE_OPTIONS:-}" in
         *cac-dns-guard.js*) ;; # already injected, skip
         *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $CAC_DIR/cac-dns-guard.js" ;;
@@ -1284,7 +1286,7 @@ if [[ -f "$CAC_DIR/cac-dns-guard.js" ]]; then
     esac
 fi
 # fallback layer: HOSTALIASES (gethostbyname level)
-[[ -f "$CAC_DIR/blocked_hosts" ]] && export HOSTALIASES="$CAC_DIR/blocked_hosts"
+[[ -r "$CAC_DIR/blocked_hosts" ]] && export HOSTALIASES="$CAC_DIR/blocked_hosts"
 
 # ── mTLS client certificate ──
 if [[ -f "$_env_dir/client_cert.pem" ]] && [[ -f "$_env_dir/client_key.pem" ]]; then
@@ -1312,7 +1314,7 @@ fi
 [[ -f "$_env_dir/machine_id" ]]  && export CAC_MACHINE_ID=$(tr -d '[:space:]' < "$_env_dir/machine_id")
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
 export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
-if [[ -f "$CAC_DIR/fingerprint-hook.js" ]]; then
+if [[ -r "$CAC_DIR/fingerprint-hook.js" ]]; then
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
         *) export NODE_OPTIONS="--require $CAC_DIR/fingerprint-hook.js ${NODE_OPTIONS:-}" ;;
@@ -1581,8 +1583,14 @@ _ensure_initialized() {
     if [[ -z "$_self_dir" ]] || [[ ! -f "$_self_dir/relay.js" ]]; then
         _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
     fi
-    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js"
-    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js"
+    # Warn if running as root — files written here become root-owned and break
+    # normal-user invocations (wrapper has set -e and will silently exit).
+    if [[ $EUID -eq 0 ]]; then
+        echo "[cac] warning: running as root may corrupt ~/.cac/ file ownership" >&2
+        echo "[cac] hint: run as your normal user instead" >&2
+    fi
+    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js" 2>/dev/null || true
+    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js" 2>/dev/null || true
     _write_dns_guard_js 2>/dev/null || true
     _write_blocked_hosts 2>/dev/null || true
 

@@ -19,8 +19,14 @@ _ensure_initialized() {
     if [[ -z "$_self_dir" ]] || [[ ! -f "$_self_dir/relay.js" ]]; then
         _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
     fi
-    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js"
-    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js"
+    # Warn if running as root — files written here become root-owned and break
+    # normal-user invocations (wrapper has set -e and will silently exit).
+    if [[ $EUID -eq 0 ]]; then
+        echo "[cac] warning: running as root may corrupt ~/.cac/ file ownership" >&2
+        echo "[cac] hint: run as your normal user instead" >&2
+    fi
+    [[ -f "$_self_dir/fingerprint-hook.js" ]] && cp "$_self_dir/fingerprint-hook.js" "$CAC_DIR/fingerprint-hook.js" 2>/dev/null || true
+    [[ -f "$_self_dir/relay.js" ]] && cp "$_self_dir/relay.js" "$CAC_DIR/relay.js" 2>/dev/null || true
     _write_dns_guard_js 2>/dev/null || true
     _write_blocked_hosts 2>/dev/null || true
 
