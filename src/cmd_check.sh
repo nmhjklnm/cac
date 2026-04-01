@@ -120,23 +120,18 @@ cmd_check() {
     else
         _id_issues+=("repo hash not spoofed")
     fi
-    # user_id consistency
+    # user_id tracking: sync from .claude.json after login (real userID wins)
     local _uid_ok=true
-    local _env_uid; _env_uid=$(_read "$env_dir/user_id" "")
-    if [[ -n "$_env_uid" ]]; then
-        local _config_dir="${CLAUDE_CONFIG_DIR:-$ENVS_DIR/$current/.claude}"
-        local _cj="$_config_dir/.claude.json"
-        [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
-        if [[ -f "$_cj" ]]; then
-            local _actual_uid
-            _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+    local _config_dir="${CLAUDE_CONFIG_DIR:-$ENVS_DIR/$current/.claude}"
+    local _cj="$_config_dir/.claude.json"
+    [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
+    if [[ -f "$_cj" ]]; then
+        local _actual_uid
+        _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+        if [[ -n "$_actual_uid" ]]; then
             (( _id_total++ )) || true
-            if [[ -n "$_actual_uid" ]] && [[ "$_actual_uid" != "$_env_uid" ]]; then
-                _uid_ok=false
-                _id_issues+=("user_id mismatch")
-            else
-                (( _id_ok++ )) || true
-            fi
+            echo "$_actual_uid" > "$env_dir/user_id" 2>/dev/null || true
+            (( _id_ok++ )) || true
         fi
     fi
     # billing header

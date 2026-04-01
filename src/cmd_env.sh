@@ -95,7 +95,7 @@ _env_cmd_create() {
     mkdir -p "$env_dir"
     [[ -n "$proxy_url" ]] && echo "$proxy_url" > "$env_dir/proxy"
     echo "$(_new_uuid)"       > "$env_dir/uuid"
-    echo "$(_new_user_id)"    > "$env_dir/user_id"
+    touch "$env_dir/user_id"
     echo "$(_new_machine_id)" > "$env_dir/machine_id"
     echo "$(_new_hostname)"   > "$env_dir/hostname"
     echo "$(_new_mac)"        > "$env_dir/mac_address"
@@ -188,7 +188,6 @@ MERGE_EOF
     if [[ -d "$env_dir/.claude" ]]; then
         export CLAUDE_CONFIG_DIR="$env_dir/.claude"
     fi
-    _update_claude_json_user_id "$(_read "$env_dir/user_id")" 2>/dev/null || true
 
     local elapsed; elapsed=$(_timer_elapsed)
     echo
@@ -284,7 +283,6 @@ _env_cmd_activate() {
         export CLAUDE_CONFIG_DIR="$ENVS_DIR/$name/.claude"
     fi
 
-    _update_claude_json_user_id "$(_read "$ENVS_DIR/$name/user_id")"
 
     # Relay lifecycle
     _relay_stop 2>/dev/null || true
