@@ -44,6 +44,9 @@ _vpn_has_process() {
     # Use pgrep on macOS/Linux for reliable process matching
     if command -v pgrep &>/dev/null; then
         pgrep -if "$pattern" >/dev/null 2>&1
+    # Windows fallback (Git Bash / MSYS2)
+    elif [[ "$(_detect_os)" == "windows" ]]; then
+        tasklist.exe /FO CSV /NH 2>/dev/null | grep -iE "$pattern" >/dev/null 2>&1
     else
         # Fallback: ps + grep, exclude only exact 'grep' and 'apply_patch'
         ps ax -o command= 2>/dev/null | grep -iE "$pattern" | grep -ivE '^grep |apply_patch' >/dev/null 2>&1
@@ -83,6 +86,15 @@ _vpn_clash_known_configs() {
             "$HOME/Library/Application Support/clash-verge/clash/config.yaml" \
             "$HOME/Library/Application Support/mihomo/config.yaml" \
             "$HOME/Library/Application Support/clash/config.yaml"
+    fi
+    if [[ "$os" == "windows" ]]; then
+        local appdata="${APPDATA:-$HOME/AppData/Roaming}"
+        printf '%s\n' \
+            "$appdata/clash-verge-rev/clash/config.yaml" \
+            "$appdata/clash-verge/clash/config.yaml" \
+            "$appdata/Clash for Windows/profiles/" \
+            "$HOME/.config/mihomo/config.yaml" \
+            "$HOME/.config/clash/config.yaml"
     fi
     # XDG paths (Linux primary, macOS fallback)
     printf '%s\n' \
@@ -209,16 +221,22 @@ _detect_vpn() {
         return 0
     fi
 
-    # V2Ray / Xray
-    if _vpn_has_process '(^|[ /])(v2ray|xray)([[:space:]]|$)'; then
-        echo "v2ray:"
-        return 0
-    fi
-
     # Surge
     if _vpn_has_process '(^|[ /])(Surge|surge-cli)([ .]|$)'; then
         port=$(_vpn_detect_surge_port 2>/dev/null || true)
         echo "surge:${port:-6171}"
+        return 0
+    fi
+
+    # v2rayN (Windows)
+    if _vpn_has_process '(^|[ /])v2rayN([ .]|$)'; then
+        echo "v2rayN:"
+        return 0
+    fi
+
+    # V2Ray / Xray
+    if _vpn_has_process '(^|[ /])(v2ray|xray|v2rayN)([[:space:]]|$)'; then
+        echo "v2ray:"
         return 0
     fi
 
@@ -243,7 +261,7 @@ _vpn_generate_rule() {
         sing-box)
             printf '%s\n' "{\"ip_cidr\":[\"${proxy_ip}/32\"],\"outbound\":\"direct\"}"
             ;;
-        v2ray)
+        v2ray|v2rayN)
             printf '%s\n' "{\"type\":\"field\",\"ip\":[\"${proxy_ip}/32\"],\"outboundTag\":\"direct\"}"
             ;;
         *)
@@ -411,9 +429,13 @@ _vpn_show_manual_guide() {
             echo "    $(_cyan "$(_vpn_generate_rule "$proxy_ip" sing-box)")"
             echo "  $(_dim "Common config path: ~/.config/sing-box/config.json")"
             ;;
-        v2ray)
-            echo "  $(_dim "V2Ray / Xray:") add this object to $(_bold "routing.rules") with outbound tag $(_bold "direct"):"
+        v2ray|v2rayN)
+            echo "  $(_dim "V2Ray / Xray / v2rayN:") add this object to $(_bold "routing.rules") with outbound tag $(_bold "direct"):"
             echo "    $(_cyan "$(_vpn_generate_rule "$proxy_ip" v2ray)")"
+            if [[ "$(_detect_os)" == "windows" ]]; then
+                local appdata="${APPDATA:-$HOME/AppData/Roaming}"
+                echo "  $(_dim "v2rayN config: ${appdata}/v2rayN/guiNConfig.json")"
+            fi
             ;;
         surge)
             echo "  $(_dim "Surge:") add this line under the $(_bold "[Rule]") section:"
