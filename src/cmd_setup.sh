@@ -39,6 +39,24 @@ _ensure_initialized() {
     rm -f "$CAC_DIR/blocked_hosts" 2>/dev/null || true
     _write_blocked_hosts 2>/dev/null || true
 
+    # Patch all existing envs: ensure DISABLE_AUTOUPDATER=1 in settings.json
+    local _sf
+    for _sf in "$ENVS_DIR"/*/.claude/settings.json; do
+        [[ -f "$_sf" ]] || continue
+        python3 - "$_sf" << 'PYEOF' 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    d = json.load(f)
+if d.get('env', {}).get('DISABLE_AUTOUPDATER') == '1':
+    sys.exit(0)
+d.setdefault('env', {})['DISABLE_AUTOUPDATER'] = '1'
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+PYEOF
+    done
+
     # PATH (idempotent — always ensure it's in rc file)
     local rc_file; rc_file=$(_detect_rc_file)
     _write_path_to_rc "$rc_file" >/dev/null 2>&1 || true

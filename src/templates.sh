@@ -105,6 +105,9 @@ _write_env_settings() {
   "statusLine": {
     "type": "command",
     "command": "bash $CLAUDE_CONFIG_DIR/statusline-command.sh"
+  },
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
   }
 }
 SETTINGS_EOF
