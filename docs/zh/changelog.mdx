@@ -5,6 +5,18 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.4
+<sub>2026-04-02</sub>
+
+**修复：Claude 自动更新器在会话中途绕过 cac wrapper** — [PR #62](https://github.com/nmhjklnm/cac/pull/62)
+
+Claude Code 的自动更新器会直接 re-exec 新版 binary，完全跳过 cac wrapper——当次会话的指纹伪装、dns-guard、时区设置全部失效。界面仍显示旧版本号，但 `/usage` 会暴露真实时区。
+
+根因：Claude Code 将"禁用自动更新"配置从 `.claude.json` 的 `autoUpdates: false` 迁移到 `settings.json` 的 `DISABLE_AUTOUPDATER=1`。cac 的 `settings.json` 模板未包含此字段，新建环境因此未受保护。
+
+- 新建环境的 `settings.json` 从创建起即包含 `DISABLE_AUTOUPDATER: "1"`。
+- 已有旧环境在下次运行任意 `cac` 命令时自动补齐（`_ensure_initialized`）。已补齐后通过 `grep` 短路，不再 fork python3。
+
 ## v1.5.3
 <sub>2026-04-01</sub>
 

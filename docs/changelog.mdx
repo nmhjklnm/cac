@@ -5,6 +5,18 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.4
+<sub>2026-04-02</sub>
+
+**Fix: Claude auto-updater bypasses cac wrapper mid-session** — [PR #62](https://github.com/nmhjklnm/cac/pull/62)
+
+Claude Code's auto-updater re-execs a new binary directly, skipping the cac wrapper entirely — fingerprint spoofing, dns-guard, and timezone settings all stop working for the remainder of the session. The UI still shows the old version, but `/usage` reveals the real timezone.
+
+Root cause: Claude migrated the "disable auto-updates" setting from `autoUpdates: false` in `.claude.json` to `DISABLE_AUTOUPDATER=1` in `settings.json`. cac's `settings.json` template didn't include this field, so new environments were left unprotected.
+
+- New environments get `DISABLE_AUTOUPDATER: "1"` in `settings.json` from creation.
+- Existing environments are patched automatically on the next `cac` invocation (`_ensure_initialized`). A `grep` short-circuit prevents repeated python3 forks once already patched.
+
 ## v1.5.3
 <sub>2026-04-01</sub>
 
