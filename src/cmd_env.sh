@@ -180,6 +180,9 @@ MERGE_EOF
         fi
     fi
 
+    # VPN compatibility check (auto-add DIRECT rule for proxy IP)
+    [[ -n "$proxy_url" ]] && _vpn_ensure_compatible "$proxy_url"
+
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     # Auto-activate
@@ -362,6 +365,7 @@ _env_cmd_set() {
                     proxy_url=$(_parse_proxy "$value")
                 fi
                 echo "$proxy_url" > "$env_dir/proxy"
+                _vpn_ensure_compatible "$proxy_url"
                 echo "$(_green_bold "Set") proxy for $(_bold "$name") → $proxy_url"
             fi
             ;;

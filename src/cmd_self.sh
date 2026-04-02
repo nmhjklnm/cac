@@ -41,6 +41,7 @@ cmd_self() {
     case "${1:-help}" in
         update)          _self_cmd_update ;;
         delete|remove)   cmd_delete ;;
+        vpn-ensure)      _vpn_ensure_compatible "${2:-}" ;;
         help|-h|--help)
             echo "$(_bold "cac self") — cac self-management"
             echo

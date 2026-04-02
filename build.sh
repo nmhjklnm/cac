@@ -9,6 +9,7 @@ OUT="$PROJ_DIR/cac"
 # 拼接顺序
 SOURCES=(
     utils.sh
+    vpn_compat.sh
     dns_block.sh
     mtls.sh
     templates.sh
