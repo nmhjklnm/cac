@@ -340,9 +340,17 @@ function Try-ClashAutoInject {
 
     if (-not $configPath -or -not (Test-Path $configPath)) { return $false }
 
-    # Validate path
+    # Validate path: no traversal, yaml extension, must be absolute
     if ($configPath -match "\.\.") { return $false }
     if ($configPath -notmatch "\.(yaml|yml)$") { return $false }
+    if ($configPath -notmatch "^[A-Za-z]:[/\\]" -and $configPath -notmatch "^/") { return $false }
+    # Must be under user profile or system config dirs
+    $allowedPrefixes = @($env:USERPROFILE, $env:APPDATA, $env:LOCALAPPDATA, "$env:ProgramFiles", "${env:ProgramFiles(x86)}")
+    $pathAllowed = $false
+    foreach ($prefix in $allowedPrefixes) {
+        if ($prefix -and $configPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $pathAllowed = $true; break }
+    }
+    if (-not $pathAllowed) { return $false }
 
     # Check if rule already exists
     $content = Get-Content $configPath -Raw
@@ -365,8 +373,9 @@ function Try-ClashAutoInject {
         $newLines += "  $rule"
     }
 
-    # Backup and write
-    Copy-Item $configPath "${configPath}.cac.bak" -Force -ErrorAction SilentlyContinue
+    # Backup with timestamp and write
+    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+    Copy-Item $configPath "${configPath}.cac.bak.${timestamp}" -Force -ErrorAction SilentlyContinue
     $newLines | Set-Content $configPath -Encoding UTF8
 
     # Reload via API
@@ -409,7 +418,15 @@ function Ensure-VPNCompatible {
 
     $hp = Get-ProxyHostPort $ProxyUrl
     $host_ = ($hp -split ":")[0]
-    if (-not $host_ -or $host_ -eq "127.0.0.1" -or $host_ -eq "localhost") { return }
+    if (-not $host_ -or $host_ -eq "127.0.0.1" -or $host_ -eq "localhost" -or $host_ -eq "::1") { return }
+
+    # Resolve hostname to IPv4 if needed
+    if ($host_ -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+        try {
+            $resolved = [System.Net.Dns]::GetHostAddresses($host_) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+            if ($resolved) { $host_ = $resolved.ToString() } else { return }
+        } catch { return }
+    }
 
     $detected = Detect-VPN
     if (-not $detected) { return }

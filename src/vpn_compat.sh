@@ -44,9 +44,9 @@ _vpn_has_process() {
     # Use pgrep on macOS/Linux for reliable process matching
     if command -v pgrep &>/dev/null; then
         pgrep -if "$pattern" >/dev/null 2>&1
-    # Windows fallback (Git Bash / MSYS2)
+    # Windows fallback (Git Bash / MSYS2) — strip CSV quotes before matching
     elif [[ "$(_detect_os)" == "windows" ]]; then
-        tasklist.exe /FO CSV /NH 2>/dev/null | grep -iE "$pattern" >/dev/null 2>&1
+        tasklist.exe /FO CSV /NH 2>/dev/null | tr -d '"' | grep -iE "$pattern" >/dev/null 2>&1
     else
         # Fallback: ps + grep, exclude only exact 'grep' and 'apply_patch'
         ps ax -o command= 2>/dev/null | grep -iE "$pattern" | grep -ivE '^grep |apply_patch' >/dev/null 2>&1
@@ -92,7 +92,7 @@ _vpn_clash_known_configs() {
         printf '%s\n' \
             "$appdata/clash-verge-rev/clash/config.yaml" \
             "$appdata/clash-verge/clash/config.yaml" \
-            "$appdata/Clash for Windows/profiles/" \
+            "$appdata/Clash for Windows/config.yaml" \
             "$HOME/.config/mihomo/config.yaml" \
             "$HOME/.config/clash/config.yaml"
     fi
@@ -286,13 +286,20 @@ _vpn_clash_api_config_path() {
 
     path=$(printf '%s' "$body" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("path", ""))' 2>/dev/null || true)
     [[ -n "$path" ]] || return 1
-    [[ "$path" == /* ]] || return 1
+    # Validate: no traversal, yaml extension
     [[ "$path" == *..* ]] && return 1
     [[ "$path" == *.yaml || "$path" == *.yml ]] || return 1
-    case "$path" in
-        "$HOME"/*|/etc/*|/usr/local/*|/opt/*) ;;
-        *) return 1 ;;
-    esac
+    # Must be absolute: Unix (/) or Windows (C:/ D:\)
+    if [[ "$(_detect_os)" == "windows" ]]; then
+        [[ "$path" =~ ^[A-Za-z]:[/\\] ]] || return 1
+    else
+        [[ "$path" == /* ]] || return 1
+        # Unix: restrict to safe directories
+        case "$path" in
+            "$HOME"/*|/etc/*|/usr/local/*|/opt/*) ;;
+            *) return 1 ;;
+        esac
+    fi
     [[ -f "$path" ]] && echo "$path"
 }
 
