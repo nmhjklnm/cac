@@ -47,6 +47,7 @@ cmd_self() {
             echo
             echo "  $(_bold "update")    Update cac to the latest version"
             echo "  $(_bold "delete")    Uninstall cac completely"
+            echo "  $(_green "cac self vpn-ensure") <proxy>    Check VPN compatibility"
             ;;
         *) _die "unknown: cac self $1" ;;
     esac

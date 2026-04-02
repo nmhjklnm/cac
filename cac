@@ -699,7 +699,15 @@ _vpn_clash_api_config_path() {
     [[ -n "$body" ]] || return 1
 
     path=$(printf '%s' "$body" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("path", ""))' 2>/dev/null || true)
-    [[ -n "$path" && -f "$path" ]] && echo "$path"
+    [[ -n "$path" ]] || return 1
+    [[ "$path" == /* ]] || return 1
+    [[ "$path" == *..* ]] && return 1
+    [[ "$path" == *.yaml || "$path" == *.yml ]] || return 1
+    case "$path" in
+        "$HOME"/*|/etc/*|/usr/local/*|/opt/*) ;;
+        *) return 1 ;;
+    esac
+    [[ -f "$path" ]] && echo "$path"
 }
 
 _vpn_clash_insert_rule() {
@@ -1621,6 +1629,19 @@ if [[ -n "$PROXY" ]]; then
         echo "[cac] error: [$_name] proxy $_hp unreachable, refusing to start." >&2
         echo "[cac] hint: run 'cac check' to diagnose, or 'cac stop' to disable temporarily" >&2
         exit 1
+    fi
+fi
+
+# VPN compatibility hint
+if [[ -n "$PROXY" ]]; then
+    _vpn_name=""
+    if pgrep -if "Shadowrocket" >/dev/null 2>&1; then _vpn_name="Shadowrocket"
+    elif pgrep -if "(mihomo|clash-meta|clash-verge|ClashX)" >/dev/null 2>&1; then _vpn_name="Clash"
+    elif pgrep -if "sing-box" >/dev/null 2>&1; then _vpn_name="sing-box"
+    fi
+    if [[ -n "$_vpn_name" ]]; then
+        echo "[cac] hint: $_vpn_name detected. Ensure $_host has a DIRECT rule to avoid VPN hijacking" >&2
+        echo "[cac] hint: run 'cac self vpn-ensure' for guidance" >&2
     fi
 fi
 
@@ -2986,6 +3007,14 @@ cmd_check() {
     # ── network check (slow — streaming output) ──
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
+        # VPN compatibility
+        local _vpn_detected
+        _vpn_detected=$(_detect_vpn 2>/dev/null || true)
+        if [[ -n "$_vpn_detected" ]]; then
+            local _vpn_type="${_vpn_detected%%:*}"
+            echo "    $(_yellow "!") vpn        $_vpn_type detected -- check DIRECT rule for proxy IP"
+        fi
+
         if ! _proxy_reachable "$proxy"; then
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
@@ -3353,6 +3382,7 @@ cmd_self() {
             echo
             echo "  $(_bold "update")    Update cac to the latest version"
             echo "  $(_bold "delete")    Uninstall cac completely"
+            echo "  $(_green "cac self vpn-ensure") <proxy>    Check VPN compatibility"
             ;;
         *) _die "unknown: cac self $1" ;;
     esac
@@ -3968,6 +3998,7 @@ cmd_help() {
     echo "  $(_bold "Self")"
     echo "    $(_green "cac self update")             Update cac"
     echo "    $(_green "cac self delete")             Uninstall cac completely"
+    echo "    $(_green "cac self vpn-ensure") <proxy>    Check VPN compatibility"
     echo
 
     echo "  $(_bold "Docker")"

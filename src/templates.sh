@@ -216,6 +216,19 @@ if [[ -n "$PROXY" ]]; then
     fi
 fi
 
+# VPN compatibility hint
+if [[ -n "$PROXY" ]]; then
+    _vpn_name=""
+    if pgrep -if "Shadowrocket" >/dev/null 2>&1; then _vpn_name="Shadowrocket"
+    elif pgrep -if "(mihomo|clash-meta|clash-verge|ClashX)" >/dev/null 2>&1; then _vpn_name="Clash"
+    elif pgrep -if "sing-box" >/dev/null 2>&1; then _vpn_name="sing-box"
+    fi
+    if [[ -n "$_vpn_name" ]]; then
+        echo "[cac] hint: $_vpn_name detected. Ensure $_host has a DIRECT rule to avoid VPN hijacking" >&2
+        echo "[cac] hint: run 'cac self vpn-ensure' for guidance" >&2
+    fi
+fi
+
 # inject env vars — proxy (only when proxy is configured)
 if [[ -n "$PROXY" ]]; then
     export _CAC_PROXY="$PROXY"

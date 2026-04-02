@@ -267,7 +267,15 @@ _vpn_clash_api_config_path() {
     [[ -n "$body" ]] || return 1
 
     path=$(printf '%s' "$body" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("path", ""))' 2>/dev/null || true)
-    [[ -n "$path" && -f "$path" ]] && echo "$path"
+    [[ -n "$path" ]] || return 1
+    [[ "$path" == /* ]] || return 1
+    [[ "$path" == *..* ]] && return 1
+    [[ "$path" == *.yaml || "$path" == *.yml ]] || return 1
+    case "$path" in
+        "$HOME"/*|/etc/*|/usr/local/*|/opt/*) ;;
+        *) return 1 ;;
+    esac
+    [[ -f "$path" ]] && echo "$path"
 }
 
 _vpn_clash_insert_rule() {

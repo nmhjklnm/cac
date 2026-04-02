@@ -189,6 +189,14 @@ cmd_check() {
     # ── network check (slow — streaming output) ──
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
+        # VPN compatibility
+        local _vpn_detected
+        _vpn_detected=$(_detect_vpn 2>/dev/null || true)
+        if [[ -n "$_vpn_detected" ]]; then
+            local _vpn_type="${_vpn_detected%%:*}"
+            echo "    $(_yellow "!") vpn        $_vpn_type detected -- check DIRECT rule for proxy IP"
+        fi
+
         if ! _proxy_reachable "$proxy"; then
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
