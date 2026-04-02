@@ -1610,6 +1610,7 @@ _ensure_initialized() {
     local _sf
     for _sf in "$ENVS_DIR"/*/.claude/settings.json; do
         [[ -f "$_sf" ]] || continue
+        grep -q '"DISABLE_AUTOUPDATER"' "$_sf" 2>/dev/null && continue
         python3 - "$_sf" << 'PYEOF' 2>/dev/null || true
 import json, sys
 path = sys.argv[1]
