@@ -84,6 +84,16 @@ if [ -n "$worktree_name" ]; then
   parts+=("$(printf "${cyan}%s${reset}" "$wt")")
 fi
 
+# IP watchdog status
+_cac_dir="$HOME/.cac"
+if [ -f "$_cac_dir/ip-alert" ]; then
+  _alert_ip=$(cat "$_cac_dir/ip-alert" 2>/dev/null | tr -d '[:space:]')
+  parts+=("$(printf "${red}${bold}IP:${_alert_ip}!${reset}")")
+elif [ -f "$_cac_dir/envs/$(cat "$_cac_dir/current" 2>/dev/null | tr -d '[:space:]')/expected_ip" ]; then
+  _exp_ip=$(cat "$_cac_dir/envs/$(cat "$_cac_dir/current" 2>/dev/null | tr -d '[:space:]')/expected_ip" 2>/dev/null | tr -d '[:space:]')
+  [ -n "$_exp_ip" ] && parts+=("$(printf "${green}IP:%s${reset}" "$_exp_ip")")
+fi
+
 if [ "${#parts[@]}" -eq 0 ]; then printf "${dim}claude${reset}\n"; exit 0; fi
 sep="$(printf " ${dim}|${reset} ")"
 result="${parts[0]}"
@@ -505,6 +515,88 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
         export HTTP_PROXY="http://127.0.0.1:$_rport"
         export ALL_PROXY="http://127.0.0.1:$_rport"
         _relay_active=true
+    fi
+fi
+
+# ── IP watchdog: continuous exit-IP monitoring ──
+# Detects if VPN/route changes cause proxy traffic to exit from wrong IP
+if [[ -n "$PROXY" ]]; then
+    _ip_watchdog_file="$CAC_DIR/ip-watchdog.pid"
+    _ip_wd_running=false
+    if [[ -f "$_ip_watchdog_file" ]]; then
+        _ip_wpid=$(tr -d '[:space:]' < "$_ip_watchdog_file")
+        [[ -n "$_ip_wpid" ]] && kill -0 "$_ip_wpid" 2>/dev/null && _ip_wd_running=true
+    fi
+    if [[ "$_ip_wd_running" != "true" ]]; then
+        (
+            trap 'rm -f "$CAC_DIR/ip-watchdog.pid" "$CAC_DIR/ip-alert"' EXIT
+            set +e
+
+            _ip_urls="https://api.ipify.org https://api.ip.sb/ip https://ip.3322.net https://ipinfo.io/ip"
+            _check_interval=60  # seconds between checks
+            _expected_ip_file="$_env_dir/expected_ip"
+            _alert_file="$CAC_DIR/ip-alert"
+            _ip_log="$CAC_DIR/ip-watchdog.log"
+            _proxy_for_check="$PROXY"
+            # If relay is active, check through relay
+            [[ -f "$CAC_DIR/relay.port" ]] && _proxy_for_check="http://127.0.0.1:$(tr -d '[:space:]' < "$CAC_DIR/relay.port")"
+
+            _get_exit_ip() {
+                local _url _ip=""
+                for _url in $_ip_urls; do
+                    _ip=$(curl -s --proxy "$_proxy_for_check" --connect-timeout 5 --max-time 8 "$_url" 2>/dev/null || true)
+                    [[ "$_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && { echo "$_ip"; return 0; }
+                done
+                return 1
+            }
+
+            # First check: establish expected IP
+            sleep 5  # wait for relay/proxy to stabilize
+            _expected=""
+            if [[ -f "$_expected_ip_file" ]]; then
+                _expected=$(tr -d '[:space:]' < "$_expected_ip_file")
+            fi
+            if [[ -z "$_expected" ]]; then
+                _expected=$(_get_exit_ip) || true
+                if [[ -n "$_expected" ]]; then
+                    echo "$_expected" > "$_expected_ip_file"
+                    echo "[$(date '+%H:%M:%S')] baseline IP: $_expected" >> "$_ip_log"
+                fi
+            fi
+
+            # Monitoring loop
+            while true; do
+                sleep "$_check_interval"
+                # Exit if proxy config removed (env switch / cac stop)
+                [[ -f "$_env_dir/proxy" ]] || exit 0
+                [[ -f "$CAC_DIR/current" ]] || exit 0
+                _cur_name=$(tr -d '[:space:]' < "$CAC_DIR/current")
+                [[ "$_cur_name" == "$_name" ]] || exit 0
+
+                _current_ip=$(_get_exit_ip) || continue  # network error, retry next cycle
+                [[ -n "$_current_ip" ]] || continue
+
+                if [[ -n "$_expected" ]] && [[ "$_current_ip" != "$_expected" ]]; then
+                    # IP changed!
+                    echo "[$(date '+%H:%M:%S')] IP CHANGED: $_expected → $_current_ip" >> "$_ip_log"
+                    echo "$_current_ip" > "$_alert_file"
+
+                    # macOS notification
+                    if command -v osascript &>/dev/null; then
+                        osascript -e "display notification \"Exit IP changed: $_expected → $_current_ip\" with title \"⚠️ cac IP Alert\" subtitle \"Proxy traffic may be hijacked\"" 2>/dev/null || true
+                    fi
+
+                    # Terminal alert (visible in cac statusline)
+                    echo "[cac] ⚠ EXIT IP CHANGED: $_expected → $_current_ip — proxy may be hijacked" >&2 2>/dev/null || true
+                else
+                    # IP stable, clear any previous alert
+                    rm -f "$_alert_file"
+                fi
+            done
+        ) &
+        _ip_new_wpid=$!
+        echo "$_ip_new_wpid" > "$_ip_watchdog_file"
+        disown "$_ip_new_wpid"
     fi
 fi
 
