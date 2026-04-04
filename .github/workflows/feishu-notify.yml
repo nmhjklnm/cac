@@ -1,0 +1,99 @@
+name: Feishu notifications
+
+on:
+  issues:
+    types: [opened, closed, reopened]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, closed, review_requested]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.actor, '[bot]') }}
+    steps:
+      - name: Send to Feishu
+        env:
+          WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          GH_EVENT: ${{ github.event_name }}
+          GH_ACTION: ${{ github.event.action }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEW_BODY: ${{ github.event.review.body }}
+          REVIEW_URL: ${{ github.event.review.html_url }}
+        run: |
+          python3 << 'EOF'
+          import os, json, urllib.request
+
+          webhook = os.environ["WEBHOOK"]
+          event   = os.environ["GH_EVENT"]
+          action  = os.environ["GH_ACTION"]
+          actor   = os.environ["GH_ACTOR"]
+          repo    = os.environ["GH_REPO"]
+
+          def clip(s, n=200):
+              s = (s or "").strip()
+              return s[:n] + ("..." if len(s) > n else "")
+
+          ACTION_ZH = {
+              "opened": "新建", "closed": "关闭", "reopened": "重新开启",
+              "review_requested": "请求 Review",
+          }
+
+          if event == "issues":
+              num, title, url = os.environ["ISSUE_NUM"], os.environ["ISSUE_TITLE"], os.environ["ISSUE_URL"]
+              header = f"[{repo}] Issue {ACTION_ZH.get(action, action)} #{num}"
+              body   = title
+          elif event == "issue_comment":
+              num, title = os.environ["ISSUE_NUM"], os.environ["ISSUE_TITLE"]
+              url    = os.environ["COMMENT_URL"]
+              header = f"[{repo}] 评论 Issue #{num}: {title}"
+              body   = clip(os.environ["COMMENT_BODY"])
+          elif event == "pull_request":
+              num, title, url = os.environ["PR_NUM"], os.environ["PR_TITLE"], os.environ["PR_URL"]
+              if action == "closed":
+                  label = "已合并" if os.environ.get("PR_MERGED") == "true" else "已关闭"
+              else:
+                  label = ACTION_ZH.get(action, action)
+              header = f"[{repo}] PR {label} #{num}"
+              body   = title
+          elif event == "pull_request_review":
+              num, pr_title = os.environ["PR_NUM"], os.environ["PR_TITLE"]
+              url   = os.environ["REVIEW_URL"]
+              state = os.environ["REVIEW_STATE"]
+              STATE_ZH = {"approved": "Approved", "changes_requested": "需要修改", "commented": "评论"}
+              header = f"[{repo}] PR Review: {STATE_ZH.get(state, state)} #{num}"
+              body   = clip(os.environ["REVIEW_BODY"]) or pr_title
+          else:
+              exit(0)
+
+          payload = {
+              "msg_type": "post",
+              "content": {"post": {"zh_cn": {
+                  "title": header,
+                  "content": [[
+                      {"tag": "text", "text": f"{actor}: {body}\n"},
+                      {"tag": "a", "text": "查看", "href": url},
+                  ]]
+              }}}
+          }
+          req = urllib.request.Request(
+              webhook, data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req) as r:
+              print(r.read().decode())
+          EOF
