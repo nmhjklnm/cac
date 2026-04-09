@@ -13,9 +13,9 @@ _cac_setting() {
     local settings="$CAC_DIR/settings.json"
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
-    val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
+    val=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(d[process.argv[2]]||'')" "$settings" "$key" 2>/dev/null || true)
     val="${val:-$default}"
-    # Sync hot-path keys as plain files (avoids python3 spawn in wrapper)
+    # Sync hot-path keys as plain files (avoids node spawn in wrapper)
     [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
     echo "$val"
 }
@@ -42,11 +42,11 @@ _gen_uuid() {
     elif [[ -f /proc/sys/kernel/random/uuid ]]; then
         cat /proc/sys/kernel/random/uuid
     else
-        python3 -c "import uuid; print(uuid.uuid4())" || _die "python3 required for UUID generation (install python3 or uuidgen)"
+        node -e "process.stdout.write(require('crypto').randomUUID())" || _die "node required for UUID generation"
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
-_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
+_new_user_id() { node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" || _die "node required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() {
     local -a _first_names=(
@@ -102,12 +102,31 @@ _proxy_host_port() {
     echo "$1" | sed 's|.*@||' | sed 's|.*://||'
 }
 
+_tcp_check() {
+    local host="$1" port="$2" timeout_sec="${3:-2}"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            # Git Bash: /dev/tcp 不可用，使用 Node.js
+            node -e "
+                const net = require('net');
+                const s = net.connect(${port}, '${host}', () => { s.destroy(); process.exit(0); });
+                s.on('error', () => process.exit(1));
+                setTimeout(() => { s.destroy(); process.exit(1); }, ${timeout_sec} * 1000);
+            " 2>/dev/null
+            ;;
+        *)
+            # Unix: /dev/tcp 可用
+            (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+            ;;
+    esac
+}
+
 _proxy_reachable() {
     local hp host port
     hp=$(_proxy_host_port "$1")
     host=$(echo "$hp" | cut -d: -f1)
     port=$(echo "$hp" | cut -d: -f2)
-    (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+    _tcp_check "$host" "$port"
 }
 
 # Auto-detect proxy protocol (when user didn't specify http/socks5/https)
@@ -184,7 +203,11 @@ _resolve_version() {
 }
 
 _version_binary() {
-    echo "$VERSIONS_DIR/$1/claude"
+    local binary="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary="claude.exe" ;;
+    esac
+    echo "$VERSIONS_DIR/$1/$binary"
 }
 
 _detect_platform() {
@@ -192,6 +215,7 @@ _detect_platform() {
     case "$(uname -s)" in
         Darwin) os="darwin" ;;
         Linux)  os="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) os="win32" ;;
         *) echo "unsupported" ; return 1 ;;
     esac
     case "$(uname -m)" in
@@ -215,9 +239,29 @@ _detect_platform() {
 }
 
 _sha256() {
+    local file="$1"
+    local hash=""
     case "$(uname -s)" in
-        Darwin) shasum -a 256 "$1" | cut -d' ' -f1 ;;
-        *)      sha256sum "$1" | cut -d' ' -f1 ;;
+        Darwin) hash=$(shasum -a 256 "$file" 2>/dev/null | cut -d' ' -f1) ;;
+        *)      hash=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1) ;;
+    esac
+    # Fallback to Node.js if system tool not available
+    if [[ -z "$hash" ]]; then
+        hash=$(node -e "const h=require('crypto').createHash('sha256');h.update(require('fs').readFileSync(process.argv[1]));process.stdout.write(h.digest('hex'))" "$file" 2>/dev/null)
+    fi
+    echo "$hash"
+}
+
+_count_claude_processes() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            # Windows: 使用 tasklist.exe
+            tasklist.exe /FI "IMAGENAME eq claude.exe" /NH 2>/dev/null \
+                | grep -ic "claude.exe" || echo 0
+            ;;
+        *)
+            pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0
+            ;;
     esac
 }
 
@@ -399,22 +443,50 @@ _update_claude_json_user_id() {
         fst=$(tr -d '[:space:]' < "$ENVS_DIR/$current_env/first_start_time")
     fi
 
-    python3 - "$claude_json" "$user_id" "$fst" << 'PYEOF'
-import json, sys, uuid
-fpath, uid, fst = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
-with open(fpath) as f:
-    d = json.load(f)
-d['userID'] = uid
-d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
-d.pop('numStartups', None)
-if fst:
-    d['firstStartTime'] = fst
-else:
-    d.pop('firstStartTime', None)
-d.pop('cachedGrowthBookFeatures', None)
-d.pop('cachedStatsigGates', None)
-with open(fpath, 'w') as f:
-    json.dump(d, f, indent=2, ensure_ascii=False)
-PYEOF
+    node -e "
+const fs=require('fs'),p=require('path');
+const fpath=process.argv[1],uid=process.argv[2],fst=process.argv[3]||'';
+let d=JSON.parse(fs.readFileSync(fpath,'utf8'));
+d.userID=uid;
+d.anonymousId='claudecode.v1.'+require('crypto').randomUUID();
+delete d.numStartups;
+if(fst){d.firstStartTime=fst;}else{delete d.firstStartTime;}
+delete d.cachedGrowthBookFeatures;
+delete d.cachedStatsigGates;
+fs.writeFileSync(fpath,JSON.stringify(d,null,2));
+" "$claude_json" "$user_id" "$fst"
     [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
+}
+
+# ── Windows PATH helper ────────────────────────────────────
+_add_to_user_path() {
+    local dir="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            local win_path
+            win_path="$(cygpath -w "$dir" 2>/dev/null || echo "$dir")"
+            # Check if already in User PATH via powershell
+            local in_path
+            in_path="$(powershell.exe -NoProfile -Command "
+                \$current = [Environment]::GetEnvironmentVariable('Path','User')
+                if (\$current -split ';' -contains '$win_path') { 'yes' } else { 'no' }
+            " 2>/dev/null | tr -d '\r')"
+            if [[ "$in_path" == "yes" ]]; then
+                _log "PATH already includes $dir"
+                return 0
+            fi
+            powershell.exe -NoProfile -Command "
+                \$current = [Environment]::GetEnvironmentVariable('Path','User')
+                [Environment]::SetEnvironmentVariable('Path', \"\$current;$win_path\", 'User')
+            " 2>/dev/null
+            if [[ $? -eq 0 ]]; then
+                _log "Added $dir to User PATH (restart terminal to take effect)"
+            else
+                _warn "Failed to add $dir to User PATH"
+            fi
+            ;;
+        *)
+            _warn "PATH modification only supported on Windows"
+            ;;
+    esac
 }

@@ -11,7 +11,7 @@ _relay_start() {
 
     # find available port (17890-17999)
     local port=17890
-    while (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; do
+    while _tcp_check 127.0.0.1 "$port"; do
         (( port++ ))
         if [[ $port -gt 17999 ]]; then
             echo "error: all ports 17890-17999 occupied" >&2
@@ -26,11 +26,11 @@ _relay_start() {
     # wait for relay ready
     local _i
     for _i in {1..30}; do
-        (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null && break
+        _tcp_check 127.0.0.1 "$port" && break
         sleep 0.1
     done
 
-    if ! (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; then
+    if ! _tcp_check 127.0.0.1 "$port"; then
         echo "error: relay startup timeout" >&2
         return 1
     fi
@@ -89,7 +89,7 @@ _relay_add_route() {
 
     # resolve to IP
     local proxy_ip
-    proxy_ip=$(python3 -c "import socket; print(socket.gethostbyname('$proxy_host'))" 2>/dev/null || echo "$proxy_host")
+    proxy_ip=$(node -e "require('dns').lookup('$proxy_host',(e,a)=>{if(e)process.exit(1);process.stdout.write(a)})" 2>/dev/null || echo "$proxy_host")
 
     local os; os=$(_detect_os)
     if [[ "$os" == "macos" ]]; then

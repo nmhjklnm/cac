@@ -6,7 +6,7 @@ _download_version() {
     local ver="$1"
     local platform; platform=$(_detect_platform) || _die "unsupported platform"
     local dest_dir="$VERSIONS_DIR/$ver"
-    local dest="$dest_dir/claude"
+    local dest=$(_version_binary "$ver")
 
     if [[ -x "$dest" ]]; then
         echo "  Already installed: $(_cyan "$ver")"
@@ -26,10 +26,9 @@ _download_version() {
     echo "done"
 
     local checksum=""
-    checksum=$(echo "$manifest" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('platforms',{}).get(sys.argv[1],{}).get('checksum',''))
+    checksum=$(echo "$manifest" | node -e "
+const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+process.stdout.write((d.platforms||{})[process.argv[1]]||'').checksum||'')
 " "$platform" 2>/dev/null || true)
 
     if [[ -z "$checksum" ]] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
@@ -37,8 +36,13 @@ print(d.get('platforms',{}).get(sys.argv[1],{}).get('checksum',''))
         _die "platform $(_cyan "$platform") not in manifest"
     fi
 
+    local binary_name="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary_name="claude.exe" ;;
+    esac
+
     echo "  Downloading $(_cyan "claude $ver") ($(_dim "$platform"))"
-    if ! curl -fL --progress-bar -o "$dest" "$_GCS_BUCKET/$ver/$platform/claude" 2>&1; then
+    if ! curl -fL --progress-bar -o "$dest" "$_GCS_BUCKET/$ver/$platform/$binary_name" 2>&1; then
         rm -rf "$dest_dir"
         _die "download failed"
     fi

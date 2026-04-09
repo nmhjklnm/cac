@@ -28,7 +28,7 @@ _dk_env_file=""
 _dk_compose_base=()
 _dk_service="cac"
 _dk_shim_if="cac-docker-shim"
-_dk_port_dir="/tmp/cac-docker-ports"
+_dk_port_dir="${TMPDIR:-${TEMP:-/tmp}}/cac-docker-ports"
 _dk_image="ghcr.io/nmhjklnm/cac-docker:latest"
 
 _dk_init() {
@@ -177,25 +177,15 @@ _dk_port_forward() {
 
   if command -v socat &>/dev/null; then
     socat TCP-LISTEN:"$port",fork,reuseaddr,bind=127.0.0.1 TCP:"${cip}":"$port" &
-  elif command -v python3 &>/dev/null; then
-    python3 -c "
-import socket, threading
-def fwd(src, dst):
-    try:
-        while d := src.recv(4096):
-            dst.sendall(d)
-    except: pass
-    finally: src.close(); dst.close()
-s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('127.0.0.1', $port)); s.listen(8)
-while True:
-    c, _ = s.accept()
-    r = socket.create_connection(('$cip', $port))
-    threading.Thread(target=fwd, args=(c,r), daemon=True).start()
-    threading.Thread(target=fwd, args=(r,c), daemon=True).start()
+  elif command -v node &>/dev/null; then
+    node -e "
+const net=require('net');
+const srv=net.createServer(s=>{const r=net.connect($port,'$cip',()=>{s.pipe(r);r.pipe(s)});r.on('error',()=>s.destroy())});
+srv.listen($port,'127.0.0.1',()=>{});
+srv.on('error',()=>{});
 " &
   else
-    _err "Need socat or python3 for port forwarding"
+    _err "Need socat or node for port forwarding"
     return 1
   fi
   local pid=$!

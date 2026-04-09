@@ -30,8 +30,9 @@ try {
 // Patch existing wrapper for known bugs — pure Node.js, no shell execution needed.
 // Users who upgrade via npm install keep their old ~/.cac/bin/claude until _ensure_initialized
 // runs (triggered by any cac command). This patch fixes critical bugs immediately.
-var wrapperPath = path.join(cacDir, 'bin', 'claude');
-if (home && fs.existsSync(wrapperPath)) {
+var wrapperPath = path.join(cacDir, 'bin', process.platform === 'win32' ? 'claude.cmd' : 'claude');
+// Skip wrapper patching on Windows (claude.cmd is a simple bat file)
+if (home && fs.existsSync(wrapperPath) && process.platform !== 'win32') {
   try {
     var wrapperContent = fs.readFileSync(wrapperPath, 'utf8');
     var patched = wrapperContent;
@@ -41,6 +42,12 @@ if (home && fs.existsSync(wrapperPath)) {
     var fixedPgrep = buggyPgrep + ' || _claude_count=0';
     if (patched.indexOf(buggyPgrep) !== -1 && patched.indexOf(fixedPgrep) === -1) {
       patched = patched.replace(buggyPgrep, fixedPgrep);
+    }
+    // Fix: _count_claude_processes may not exist in old wrappers
+    var oldClaudeCount = '_claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d \'[:space:]\') || _claude_count=0';
+    var newClaudeCount = '_claude_count=$(_count_claude_processes)';
+    if (patched.indexOf(oldClaudeCount) !== -1 && patched.indexOf(newClaudeCount) === -1) {
+      patched = patched.replace(oldClaudeCount, newClaudeCount);
     }
     // Fix: session exit killed the shared relay, breaking all other sessions.
     // Remove the trap so _cleanup_all never fires on exit.

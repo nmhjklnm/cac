@@ -65,6 +65,10 @@ _generate_client_cert() {
     }
 
     # sign client cert with CA (valid for 1 year)
+    local _tmp_ext
+    _tmp_ext=$(mktemp) || _tmp_ext="/tmp/cac-ext-$$"
+    printf "keyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth" > "$_tmp_ext"
+
     openssl x509 -req \
         -in "$client_csr" \
         -CA "$ca_cert" \
@@ -72,10 +76,12 @@ _generate_client_cert() {
         -CAcreateserial \
         -out "$client_cert" \
         -days 365 \
-        -extfile <(printf "keyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth") \
+        -extfile "$_tmp_ext" \
         2>/dev/null || {
+        rm -f "$_tmp_ext"
         echo "error: failed to sign client cert" >&2; return 1
     }
+    rm -f "$_tmp_ext"
     chmod 644 "$client_cert"
 
     # cleanup CSR (no longer needed)

@@ -184,17 +184,12 @@ if [[ -d "$_env_dir/.claude" ]]; then
             # Skip merge if settings.json is newer than both inputs
             if [[ "$_src_settings" -nt "$_env_dir/.claude/settings.json" ]] || \
                [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
-                python3 -c "
-import json,sys
-b=json.load(open(sys.argv[1]))
-o=json.load(open(sys.argv[2]))
-def m(b,o):
-    r=dict(b)
-    for k,v in o.items():
-        if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
-        else: r[k]=v
-    return r
-json.dump(m(b,o),open(sys.argv[3],'w'),indent=2,ensure_ascii=False)
+                node -e "
+const fs=require('fs');
+const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const o=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+function m(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=m(r[k],v)}else{r[k]=v}}return r}
+fs.writeFileSync(process.argv[3],JSON.stringify(m(b,o),null,2));
 " "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
             fi
         fi
@@ -212,7 +207,7 @@ if [[ -n "$PROXY" ]]; then
     _hp="${PROXY##*@}"; _hp="${_hp##*://}"
     _host="${_hp%%:*}"
     _port="${_hp##*:}"
-    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+    if ! _tcp_check "$_host" "$_port"; then
         echo "[cac] error: [$_name] proxy $_hp unreachable, refusing to start." >&2
         echo "[cac] hint: run 'cac check' to diagnose, or 'cac stop' to disable temporarily" >&2
         exit 1
@@ -393,7 +388,7 @@ fi
 _real=""
 if [[ -f "$_env_dir/version" ]]; then
     _ver=$(tr -d '[:space:]' < "$_env_dir/version")
-    _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    _ver_bin=$(_version_binary "$_ver")
     [[ -x "$_ver_bin" ]] && _real="$_ver_bin"
 fi
 if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
@@ -435,14 +430,14 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     # start if not running
     if [[ "$_relay_running" != "true" ]]; then
         _rport=17890
-        while (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null; do
+        while _tcp_check 127.0.0.1 "$_rport"; do
             (( _rport++ ))
             [[ $_rport -gt 17999 ]] && break
         done
         node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
         disown
         for _ri in {1..30}; do
-            (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
+            _tcp_check 127.0.0.1 "$_rport" && break
             sleep 0.1
         done
         echo "$PROXY" > "$_relay_proxy_file"
@@ -471,7 +466,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
                     _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
                     if kill -0 "$_rpid" 2>/dev/null; then
                         _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
-                        (echo >/dev/tcp/127.0.0.1/"$_rport") 2>/dev/null && continue
+                        _tcp_check 127.0.0.1 "$_rport" && continue
                         # process alive but port unresponsive — kill and restart
                         kill "$_rpid" 2>/dev/null || true
                     fi
@@ -501,8 +496,8 @@ fi
 # ── Concurrent session check ──
 _max_sessions=10
 [[ -f "$CAC_DIR/max_sessions" ]] && _ms=$(tr -d '[:space:]' < "$CAC_DIR/max_sessions") && [[ -n "$_ms" ]] && _max_sessions="$_ms"
-# pgrep exits 1 when no match; with pipefail + set -e that would abort the wrapper
-_claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
+# Cross-platform process counting (tasklist.exe on Windows, pgrep on Unix)
+_claude_count=$(_count_claude_processes)
 if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
     echo "[cac] warning: $_claude_count claude sessions running (threshold: $_max_sessions)" >&2
     echo "[cac] hint: concurrent sessions on the same device may trigger detection" >&2
@@ -520,6 +515,16 @@ WRAPPER_EOF
     local _tmp="$CAC_DIR/bin/claude.tmp"
     sed "s/__CAC_VER__/$CAC_VERSION/" "$CAC_DIR/bin/claude" > "$_tmp" && mv "$_tmp" "$CAC_DIR/bin/claude"
     chmod +x "$CAC_DIR/bin/claude"
+
+    # Windows: also generate claude.cmd that launches bash wrapper
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cat > "$CAC_DIR/bin/claude.cmd" << 'CMDEOF'
+@echo off
+bash "%~dpn0" %*
+CMDEOF
+            ;;
+    esac
 }
 
 _write_ioreg_shim() {
