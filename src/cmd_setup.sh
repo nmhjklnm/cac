@@ -44,18 +44,15 @@ _ensure_initialized() {
     for _sf in "$ENVS_DIR"/*/.claude/settings.json; do
         [[ -f "$_sf" ]] || continue
         grep -q '"DISABLE_AUTOUPDATER"' "$_sf" 2>/dev/null && continue
-        python3 - "$_sf" << 'PYEOF' 2>/dev/null || true
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    d = json.load(f)
-if d.get('env', {}).get('DISABLE_AUTOUPDATER') == '1':
-    sys.exit(0)
-d.setdefault('env', {})['DISABLE_AUTOUPDATER'] = '1'
-with open(path, 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-PYEOF
+        node -e "
+const fs=require('fs'),p=require('path');
+const fpath=process.argv[1];
+let d=JSON.parse(fs.readFileSync(fpath,'utf8'));
+if((d.env||{}).DISABLE_AUTOUPDATER==='1')process.exit(0);
+if(!d.env)d.env={};
+d.env.DISABLE_AUTOUPDATER='1';
+fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
+" "$_sf" 2>/dev/null || true
     done
 
     # PATH (idempotent — always ensure it's in rc file)
@@ -81,7 +78,7 @@ PYEOF
     if [[ -z "$real_claude" ]]; then
         local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
         if [[ -n "$latest_ver" ]]; then
-            real_claude="$VERSIONS_DIR/$latest_ver/claude"
+            real_claude=$(_version_binary "$latest_ver")
         fi
     fi
     if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
@@ -91,13 +88,15 @@ PYEOF
     local os; os=$(_detect_os)
     _write_wrapper
 
-    # Shims
-    _write_hostname_shim
-    _write_ifconfig_shim
-    if [[ "$os" == "macos" ]]; then
-        _write_ioreg_shim
-    elif [[ "$os" == "linux" ]]; then
-        _write_machine_id_shim
+    # Shims (skip on Windows — fingerprint-hook.js covers it)
+    if [[ "$os" != "windows" ]]; then
+        _write_hostname_shim
+        _write_ifconfig_shim
+        if [[ "$os" == "macos" ]]; then
+            _write_ioreg_shim
+        elif [[ "$os" == "linux" ]]; then
+            _write_machine_id_shim
+        fi
     fi
 
     # mTLS CA
