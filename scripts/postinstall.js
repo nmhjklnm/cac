@@ -1,11 +1,62 @@
 #!/usr/bin/env node
 var path = require('path');
 var fs = require('fs');
+var childProcess = require('child_process');
 
 var pkgDir = path.join(__dirname, '..');
 var cacBin = path.join(pkgDir, 'cac');
 var home = process.env.HOME || process.env.USERPROFILE || '';
 var cacDir = path.join(home, '.cac');
+
+function findWindowsBash() {
+  if (process.platform !== 'win32') return null;
+
+  var seen = Object.create(null);
+  var candidates = [];
+
+  function addCandidate(candidate) {
+    if (!candidate) return;
+    var normalized = path.normalize(candidate);
+    if (seen[normalized]) return;
+    seen[normalized] = true;
+    candidates.push(normalized);
+  }
+
+  [process.env.ProgramFiles, process.env.ProgramW6432].forEach(function (base) {
+    if (base) addCandidate(path.join(base, 'Git', 'bin', 'bash.exe'));
+  });
+
+  if (process.env.LocalAppData) {
+    addCandidate(path.join(process.env.LocalAppData, 'Programs', 'Git', 'bin', 'bash.exe'));
+    addCandidate(path.join(process.env.LocalAppData, 'Git', 'bin', 'bash.exe'));
+  }
+
+  try {
+    var gitWhere = childProcess.spawnSync('where.exe', ['git.exe'], { encoding: 'utf8', windowsHide: true });
+    if (gitWhere.status === 0 && gitWhere.stdout) {
+      gitWhere.stdout.split(/\r?\n/).forEach(function (line) {
+        var gitExe = line.trim();
+        if (gitExe) addCandidate(path.resolve(path.dirname(gitExe), '..', 'bin', 'bash.exe'));
+      });
+    }
+  } catch (e) {}
+
+  try {
+    var bashWhere = childProcess.spawnSync('where.exe', ['bash.exe'], { encoding: 'utf8', windowsHide: true });
+    if (bashWhere.status === 0 && bashWhere.stdout) {
+      bashWhere.stdout.split(/\r?\n/).forEach(function (line) {
+        var bashExe = line.trim();
+        if (bashExe && bashExe.toLowerCase().indexOf('\\windowsapps\\') === -1) addCandidate(bashExe);
+      });
+    }
+  } catch (e) {}
+
+  for (var i = 0; i < candidates.length; i++) {
+    if (fs.existsSync(candidates[i])) return candidates[i];
+  }
+
+  return null;
+}
 
 // Ensure cac is executable
 try { fs.chmodSync(cacBin, 0o755); } catch (e) {}
@@ -105,10 +156,18 @@ try {
 // cac env ls now calls _require_setup (fixed in 1.4.3+).
 if (home) {
   try {
-    var spawnSync = require('child_process').spawnSync;
-    spawnSync(cacBin, ['env', 'ls'], {
+    var spawnCommand = cacBin;
+    var spawnArgs = ['env', 'ls'];
+    if (process.platform === 'win32') {
+      var bashExe = findWindowsBash();
+      if (!bashExe) throw new Error('bash.exe not found');
+      spawnCommand = bashExe;
+      spawnArgs = [cacBin].concat(spawnArgs);
+    }
+    childProcess.spawnSync(spawnCommand, spawnArgs, {
       stdio: 'ignore',
       timeout: 8000,
+      cwd: pkgDir,
       env: Object.assign({}, process.env, { HOME: home })
     });
   } catch (e) {

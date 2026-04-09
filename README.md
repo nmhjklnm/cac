@@ -63,6 +63,45 @@ npm install -g claude-cac
 curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
 ```
 
+### Windows 本地部署（当前分支）
+
+> 当前 Windows 支持已合入仓库，但如果你使用的是尚未发布的新分支，请先 **clone 到本地运行**，不要等待云端或 npm 更新。
+
+前置要求：
+- Windows 10/11
+- Git for Windows（必须包含 Git Bash）
+- Node.js 18+
+
+```powershell
+git clone https://github.com/nmhjklnm/cac.git
+cd cac
+npm install
+
+# 验证入口（CMD / PowerShell 都可）
+.\cac.cmd -v
+.\cac.cmd help
+```
+
+首次使用建议直接从仓库根目录运行：
+
+```powershell
+# 安装 Claude Code 二进制
+.\cac.cmd claude install latest
+
+# 创建 Windows 环境（可带代理，也可不带）
+.\cac.cmd env create win-work -p 1.2.3.4:1080:u:p
+.\cac.cmd env check
+
+# 启动 Claude Code（首次需 /login）
+claude
+```
+
+说明：
+- `cac.cmd` 是 Windows 入口，会自动查找 Git Bash 并委托给主 Bash 脚本。
+- 首次初始化后会生成 `%USERPROFILE%\.cac\bin\claude.cmd`。
+- 如果新开的 CMD / PowerShell 里还找不到 `claude`，重开终端一次；若仍找不到，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
+- 在此分支验证期间，建议优先使用仓库根目录下的 `.\cac.cmd`，等正式发版后再切回 `npm install -g`。
+
 ### 快速上手
 
 ```bash
@@ -247,6 +286,45 @@ npm install -g claude-cac
 # or manual
 curl -fsSL https://raw.githubusercontent.com/nmhjklnm/cac/master/install.sh | bash
 ```
+
+### Windows local deployment (current branch)
+
+> Windows support is implemented in this branch, but if you are testing changes before the next release, use a **local checkout** instead of waiting for npm/cloud rollout.
+
+Prerequisites:
+- Windows 10/11
+- Git for Windows with Git Bash
+- Node.js 18+
+
+```powershell
+git clone https://github.com/nmhjklnm/cac.git
+cd cac
+npm install
+
+# verify entrypoints from CMD or PowerShell
+.\cac.cmd -v
+.\cac.cmd help
+```
+
+For the first run, execute commands from the repository root:
+
+```powershell
+# install Claude Code binary
+.\cac.cmd claude install latest
+
+# create a Windows environment (with or without proxy)
+.\cac.cmd env create win-work -p 1.2.3.4:1080:u:p
+.\cac.cmd env check
+
+# start Claude Code (first time: /login)
+claude
+```
+
+Notes:
+- `cac.cmd` is the Windows entrypoint. It locates Git Bash and delegates to the main Bash implementation.
+- First initialization generates `%USERPROFILE%\.cac\bin\claude.cmd`.
+- If `claude` is not available in a new CMD/PowerShell window, reopen the terminal once; if it still is not found, add `%USERPROFILE%\.cac\bin` to your user PATH.
+- While this branch is under validation, prefer running `.\cac.cmd` from the repo root. Switch back to `npm install -g` after the release is published.
 
 ### Quick start
 
