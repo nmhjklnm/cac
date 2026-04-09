@@ -102,12 +102,31 @@ _proxy_host_port() {
     echo "$1" | sed 's|.*@||' | sed 's|.*://||'
 }
 
+_tcp_check() {
+    local host="$1" port="$2" timeout_sec="${3:-2}"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            # Git Bash: /dev/tcp 不可用，使用 Node.js
+            node -e "
+                const net = require('net');
+                const s = net.connect(${port}, '${host}', () => { s.destroy(); process.exit(0); });
+                s.on('error', () => process.exit(1));
+                setTimeout(() => { s.destroy(); process.exit(1); }, ${timeout_sec} * 1000);
+            " 2>/dev/null
+            ;;
+        *)
+            # Unix: /dev/tcp 可用
+            (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+            ;;
+    esac
+}
+
 _proxy_reachable() {
     local hp host port
     hp=$(_proxy_host_port "$1")
     host=$(echo "$hp" | cut -d: -f1)
     port=$(echo "$hp" | cut -d: -f2)
-    (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+    _tcp_check "$host" "$port"
 }
 
 # Auto-detect proxy protocol (when user didn't specify http/socks5/https)
