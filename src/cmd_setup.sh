@@ -88,6 +88,9 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
     local os; os=$(_detect_os)
     _write_wrapper
 
+    # Windows: add cac bin to User PATH
+    _add_to_user_path "$CAC_DIR/bin"
+
     # Shims (skip on Windows — fingerprint-hook.js covers it)
     if [[ "$os" != "windows" ]]; then
         _write_hostname_shim
