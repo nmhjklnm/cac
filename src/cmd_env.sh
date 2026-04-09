@@ -156,23 +156,13 @@ _env_cmd_create() {
             fi
             if [[ -f "$src_claude_dir/settings.json" ]]; then
                 cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
-                python3 - "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json" << 'MERGE_EOF'
-import json, sys
-base = json.load(open(sys.argv[1]))
-override = json.load(open(sys.argv[2]))
-# Deep merge: override wins
-def merge(b, o):
-    r = dict(b)
-    for k, v in o.items():
-        if k in r and isinstance(r[k], dict) and isinstance(v, dict):
-            r[k] = merge(r[k], v)
-        else:
-            r[k] = v
-    return r
-result = merge(base, override)
-with open(sys.argv[3], 'w') as f:
-    json.dump(result, f, indent=2, ensure_ascii=False)
-MERGE_EOF
+                node -e "
+const fs=require('fs');
+const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
+fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
+" "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
             fi
             # Store clone source for wrapper merge-on-startup
             echo "$src_claude_dir" > "$env_dir/clone_source"
