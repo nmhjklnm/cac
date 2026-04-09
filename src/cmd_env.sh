@@ -3,6 +3,8 @@
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona=""
+    # Windows: force copy mode (NTFS symlinks require admin privileges)
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -62,7 +64,7 @@ _env_cmd_create() {
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
             local detected_tz country_code
-            read -r detected_tz country_code < <(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''), d.get('countryCode',''))" 2>/dev/null || echo "")
+            read -r detected_tz country_code < <(echo "$ip_info" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.timezone||'')+' '+(d.countryCode||''))" 2>/dev/null || echo "")
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
             if [[ -n "$country_code" ]]; then
                 case "$country_code" in
