@@ -127,7 +127,13 @@ cmd_check() {
     [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
     if [[ -f "$_cj" ]]; then
         local _actual_uid
-        _actual_uid=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(d.userID||'')" "$_cj" 2>/dev/null || true)
+        _actual_uid=$(node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.userID || '');
+} catch (_) {}
+" "$_cj" 2>/dev/null || true)
         if [[ -n "$_actual_uid" ]]; then
             (( _id_total++ )) || true
             echo "$_actual_uid" > "$env_dir/user_id" 2>/dev/null || true
@@ -159,6 +165,10 @@ cmd_check() {
     elif [[ "$os" == "linux" ]]; then
         local ipv6_addrs
         ipv6_addrs=$(ip -6 addr show scope global 2>/dev/null | grep -c "inet6" || true)
+        [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
+    elif [[ "$os" == "windows" ]]; then
+        local ipv6_addrs
+        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -ci "IPv6 Address" || true)
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
     if [[ "$ipv6_leak" == "true" ]]; then
@@ -211,7 +221,13 @@ cmd_check() {
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
                     local ip_tz
                     ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
-                        node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write(d.timezone||'')" 2>/dev/null || true)
+                        node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+  process.stdout.write(d.timezone || '');
+} catch (_) {}
+" 2>/dev/null || true)
                     if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
                         echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
                         problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")
@@ -237,6 +253,8 @@ cmd_check() {
                 [[ "$tun_count" -gt 3 ]] && has_conflict=true
             elif [[ "$os" == "linux" ]]; then
                 ip link show tun0 >/dev/null 2>&1 && has_conflict=true
+            elif [[ "$os" == "windows" ]]; then
+                ipconfig.exe 2>/dev/null | grep -qiE "TAP|TUN|Wintun|WireGuard|VPN" && has_conflict=true
             fi
 
             if [[ "$has_conflict" == "true" ]]; then

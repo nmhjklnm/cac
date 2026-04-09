@@ -23,9 +23,16 @@ _cac_setting() {
     local settings="$CAC_DIR/settings.json"
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
-    val=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$settings" "$key" 2>/dev/null || true)
+    val=$(node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  const v = d[process.argv[2]];
+  process.stdout.write(v == null ? '' : String(v));
+} catch (_) {}
+" "$settings" "$key" 2>/dev/null || true)
     val="${val:-$default}"
-    # Sync hot-path keys as plain files (avoids python3 spawn in wrapper)
+    # Sync hot-path keys as plain files (avoids node spawn in wrapper)
     [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
     echo "$val"
 }
@@ -52,11 +59,11 @@ _gen_uuid() {
     elif [[ -f /proc/sys/kernel/random/uuid ]]; then
         cat /proc/sys/kernel/random/uuid
     else
-        python3 -c "import uuid; print(uuid.uuid4())" || _die "python3 required for UUID generation (install python3 or uuidgen)"
+        node -e "process.stdout.write(require('crypto').randomUUID())" || _die "node required for UUID generation"
     fi
 }
 _new_uuid()    { _gen_uuid | tr '[:lower:]' '[:upper:]'; }
-_new_user_id() { python3 -c "import os; print(os.urandom(32).hex())" || _die "python3 required"; }
+_new_user_id() { node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" || _die "node required"; }
 _new_machine_id() { _gen_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]'; }
 _new_hostname() {
     local -a _first_names=(
@@ -112,12 +119,29 @@ _proxy_host_port() {
     echo "$1" | sed 's|.*@||' | sed 's|.*://||'
 }
 
+_tcp_check() {
+    local host="$1" port="$2" timeout_sec="${3:-2}"
+    if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
+        return 0
+    fi
+    node -e "
+const net = require('net');
+const host = process.argv[1];
+const port = Number(process.argv[2]);
+const timeoutMs = Number(process.argv[3]) * 1000;
+const s = net.createConnection({ host, port, timeout: timeoutMs });
+s.on('connect', () => { s.destroy(); process.exit(0); });
+s.on('timeout', () => { s.destroy(); process.exit(1); });
+s.on('error', () => process.exit(1));
+" "$host" "$port" "$timeout_sec" >/dev/null 2>&1
+}
+
 _proxy_reachable() {
     local hp host port
     hp=$(_proxy_host_port "$1")
     host=$(echo "$hp" | cut -d: -f1)
     port=$(echo "$hp" | cut -d: -f2)
-    (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
+    _tcp_check "$host" "$port"
 }
 
 # Auto-detect proxy protocol (when user didn't specify http/socks5/https)
@@ -194,7 +218,11 @@ _resolve_version() {
 }
 
 _version_binary() {
-    echo "$VERSIONS_DIR/$1/claude"
+    local binary="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary="claude.exe" ;;
+    esac
+    echo "$VERSIONS_DIR/$1/$binary"
 }
 
 _detect_platform() {
@@ -202,6 +230,7 @@ _detect_platform() {
     case "$(uname -s)" in
         Darwin) os="darwin" ;;
         Linux)  os="linux" ;;
+        MINGW*|MSYS*|CYGWIN*) os="win32" ;;
         *) echo "unsupported" ; return 1 ;;
     esac
     case "$(uname -m)" in
@@ -225,9 +254,31 @@ _detect_platform() {
 }
 
 _sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d' ' -f1
+    else
+        node -e "
+const fs = require('fs');
+const crypto = require('crypto');
+const b = fs.readFileSync(process.argv[1]);
+process.stdout.write(crypto.createHash('sha256').update(b).digest('hex'));
+" "$file"
+    fi
+}
+
+_count_claude_processes() {
     case "$(uname -s)" in
-        Darwin) shasum -a 256 "$1" | cut -d' ' -f1 ;;
-        *)      sha256sum "$1" | cut -d' ' -f1 ;;
+        MINGW*|MSYS*|CYGWIN*)
+            tasklist.exe //FO CSV //NH 2>/dev/null \
+                | tr -d '\r' \
+                | awk -F',' 'tolower($1) ~ /^"claude(\.exe)?"$/ { c++ } END { print c+0 }'
+            ;;
+        *)
+            pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0
+            ;;
     esac
 }
 
@@ -409,24 +460,55 @@ _update_claude_json_user_id() {
         fst=$(tr -d '[:space:]' < "$ENVS_DIR/$current_env/first_start_time")
     fi
 
-    python3 - "$claude_json" "$user_id" "$fst" << 'PYEOF'
-import json, sys, uuid
-fpath, uid, fst = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
-with open(fpath) as f:
-    d = json.load(f)
-d['userID'] = uid
-d['anonymousId'] = 'claudecode.v1.' + str(uuid.uuid4())
-d.pop('numStartups', None)
-if fst:
-    d['firstStartTime'] = fst
-else:
-    d.pop('firstStartTime', None)
-d.pop('cachedGrowthBookFeatures', None)
-d.pop('cachedStatsigGates', None)
-with open(fpath, 'w') as f:
-    json.dump(d, f, indent=2, ensure_ascii=False)
-PYEOF
+    node -e "
+const fs = require('fs');
+const crypto = require('crypto');
+const fpath = process.argv[1];
+const uid = process.argv[2];
+const fst = process.argv[3] || '';
+const d = JSON.parse(fs.readFileSync(fpath, 'utf8'));
+d.userID=uid;
+d.anonymousId='claudecode.v1.'+crypto.randomUUID();
+delete d.numStartups;
+if(fst){d.firstStartTime=fst;}else{delete d.firstStartTime;}
+delete d.cachedGrowthBookFeatures;
+delete d.cachedStatsigGates;
+fs.writeFileSync(fpath, JSON.stringify(d, null, 2) + '\n');
+" "$claude_json" "$user_id" "$fst"
     [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
+}
+
+# ── Windows PATH helper ────────────────────────────────────
+_add_to_user_path() {
+    local dir="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            local win_path
+            win_path="$(cygpath -w "$dir" 2>/dev/null || echo "$dir")"
+            # Check if already in User PATH via powershell
+            local in_path
+            in_path="$(powershell.exe -NoProfile -Command "
+                \$current = [Environment]::GetEnvironmentVariable('Path','User')
+                if (\$current -split ';' -contains '$win_path') { 'yes' } else { 'no' }
+            " 2>/dev/null | tr -d '\r')"
+            if [[ "$in_path" == "yes" ]]; then
+                _log "PATH already includes $dir"
+                return 0
+            fi
+            powershell.exe -NoProfile -Command "
+                \$current = [Environment]::GetEnvironmentVariable('Path','User')
+                [Environment]::SetEnvironmentVariable('Path', \"\$current;$win_path\", 'User')
+            " 2>/dev/null
+            if [[ $? -eq 0 ]]; then
+                _log "Added $dir to User PATH (restart terminal to take effect)"
+            else
+                _warn "Failed to add $dir to User PATH"
+            fi
+            ;;
+        *)
+            _warn "PATH modification only supported on Windows"
+            ;;
+    esac
 }
 
 # ━━━ dns_block.sh ━━━
@@ -885,6 +967,10 @@ _generate_client_cert() {
     }
 
     # sign client cert with CA (valid for 1 year)
+    local _tmp_ext
+    _tmp_ext=$(mktemp) || _tmp_ext="/tmp/cac-ext-$$"
+    printf "keyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth" > "$_tmp_ext"
+
     openssl x509 -req \
         -in "$client_csr" \
         -CA "$ca_cert" \
@@ -892,10 +978,12 @@ _generate_client_cert() {
         -CAcreateserial \
         -out "$client_cert" \
         -days 365 \
-        -extfile <(printf "keyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth") \
+        -extfile "$_tmp_ext" \
         2>/dev/null || {
+        rm -f "$_tmp_ext"
         echo "error: failed to sign client cert" >&2; return 1
     }
+    rm -f "$_tmp_ext"
     chmod 644 "$client_cert"
 
     # cleanup CSR (no longer needed)
@@ -1123,17 +1211,12 @@ if [[ -d "$_env_dir/.claude" ]]; then
             # Skip merge if settings.json is newer than both inputs
             if [[ "$_src_settings" -nt "$_env_dir/.claude/settings.json" ]] || \
                [[ "$_env_dir/.claude/settings.override.json" -nt "$_env_dir/.claude/settings.json" ]]; then
-                python3 -c "
-import json,sys
-b=json.load(open(sys.argv[1]))
-o=json.load(open(sys.argv[2]))
-def m(b,o):
-    r=dict(b)
-    for k,v in o.items():
-        if k in r and isinstance(r[k],dict) and isinstance(v,dict): r[k]=m(r[k],v)
-        else: r[k]=v
-    return r
-json.dump(m(b,o),open(sys.argv[3],'w'),indent=2,ensure_ascii=False)
+                node -e "
+const fs=require('fs');
+const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const o=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+function m(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=m(r[k],v)}else{r[k]=v}}return r}
+fs.writeFileSync(process.argv[3],JSON.stringify(m(b,o),null,2));
 " "$_src_settings" "$_env_dir/.claude/settings.override.json" "$_env_dir/.claude/settings.json" 2>/dev/null || true
             fi
         fi
@@ -1151,7 +1234,7 @@ if [[ -n "$PROXY" ]]; then
     _hp="${PROXY##*@}"; _hp="${_hp##*://}"
     _host="${_hp%%:*}"
     _port="${_hp##*:}"
-    if ! (echo >/dev/tcp/"$_host"/"$_port") 2>/dev/null; then
+    if ! _tcp_check "$_host" "$_port"; then
         echo "[cac] error: [$_name] proxy $_hp unreachable, refusing to start." >&2
         echo "[cac] hint: run 'cac check' to diagnose, or 'cac stop' to disable temporarily" >&2
         exit 1
@@ -1332,7 +1415,7 @@ fi
 _real=""
 if [[ -f "$_env_dir/version" ]]; then
     _ver=$(tr -d '[:space:]' < "$_env_dir/version")
-    _ver_bin="$CAC_DIR/versions/$_ver/claude"
+    _ver_bin=$(_version_binary "$_ver")
     [[ -x "$_ver_bin" ]] && _real="$_ver_bin"
 fi
 if [[ -z "$_real" ]] || [[ ! -x "$_real" ]]; then
@@ -1374,14 +1457,14 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
     # start if not running
     if [[ "$_relay_running" != "true" ]]; then
         _rport=17890
-        while (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null; do
+        while _tcp_check 127.0.0.1 "$_rport"; do
             (( _rport++ ))
             [[ $_rport -gt 17999 ]] && break
         done
         node "$_relay_js" "$_rport" "$PROXY" "$_relay_pid_file" </dev/null >"$CAC_DIR/relay.log" 2>&1 &
         disown
         for _ri in {1..30}; do
-            (echo >/dev/tcp/127.0.0.1/$_rport) 2>/dev/null && break
+            _tcp_check 127.0.0.1 "$_rport" && break
             sleep 0.1
         done
         echo "$PROXY" > "$_relay_proxy_file"
@@ -1410,7 +1493,7 @@ if [[ -n "$PROXY" ]] && [[ -f "$CAC_DIR/relay.js" ]]; then
                     _rpid=$(tr -d '[:space:]' < "$CAC_DIR/relay.pid")
                     if kill -0 "$_rpid" 2>/dev/null; then
                         _rport=$(tr -d '[:space:]' < "$CAC_DIR/relay.port" 2>/dev/null || true)
-                        (echo >/dev/tcp/127.0.0.1/"$_rport") 2>/dev/null && continue
+                        _tcp_check 127.0.0.1 "$_rport" && continue
                         # process alive but port unresponsive — kill and restart
                         kill "$_rpid" 2>/dev/null || true
                     fi
@@ -1440,8 +1523,8 @@ fi
 # ── Concurrent session check ──
 _max_sessions=10
 [[ -f "$CAC_DIR/max_sessions" ]] && _ms=$(tr -d '[:space:]' < "$CAC_DIR/max_sessions") && [[ -n "$_ms" ]] && _max_sessions="$_ms"
-# pgrep exits 1 when no match; with pipefail + set -e that would abort the wrapper
-_claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
+# Cross-platform process counting (tasklist.exe on Windows, pgrep on Unix)
+_claude_count=$(_count_claude_processes)
 if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
     echo "[cac] warning: $_claude_count claude sessions running (threshold: $_max_sessions)" >&2
     echo "[cac] hint: concurrent sessions on the same device may trigger detection" >&2
@@ -1459,6 +1542,22 @@ WRAPPER_EOF
     local _tmp="$CAC_DIR/bin/claude.tmp"
     sed "s/__CAC_VER__/$CAC_VERSION/" "$CAC_DIR/bin/claude" > "$_tmp" && mv "$_tmp" "$CAC_DIR/bin/claude"
     chmod +x "$CAC_DIR/bin/claude"
+
+    # Windows: also generate claude.cmd that launches bash wrapper
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cat > "$CAC_DIR/bin/claude.cmd" << 'CMDEOF'
+@echo off
+setlocal
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%.") do set "SCRIPT_DIR=%%~fI"
+"%ProgramFiles%\Git\bin\bash.exe" "%SCRIPT_DIR%\claude" %*
+if errorlevel 9009 (
+  bash "%SCRIPT_DIR%\claude" %*
+)
+CMDEOF
+            ;;
+    esac
 }
 
 _write_ioreg_shim() {
@@ -1611,18 +1710,15 @@ _ensure_initialized() {
     for _sf in "$ENVS_DIR"/*/.claude/settings.json; do
         [[ -f "$_sf" ]] || continue
         grep -q '"DISABLE_AUTOUPDATER"' "$_sf" 2>/dev/null && continue
-        python3 - "$_sf" << 'PYEOF' 2>/dev/null || true
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    d = json.load(f)
-if d.get('env', {}).get('DISABLE_AUTOUPDATER') == '1':
-    sys.exit(0)
-d.setdefault('env', {})['DISABLE_AUTOUPDATER'] = '1'
-with open(path, 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-PYEOF
+        node -e "
+const fs=require('fs'),p=require('path');
+const fpath=process.argv[1];
+let d=JSON.parse(fs.readFileSync(fpath,'utf8'));
+if((d.env||{}).DISABLE_AUTOUPDATER==='1')process.exit(0);
+if(!d.env)d.env={};
+d.env.DISABLE_AUTOUPDATER='1';
+fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
+" "$_sf" 2>/dev/null || true
     done
 
     # PATH (idempotent — always ensure it's in rc file)
@@ -1648,7 +1744,7 @@ PYEOF
     if [[ -z "$real_claude" ]]; then
         local latest_ver; latest_ver=$(_read "$VERSIONS_DIR/.latest" "")
         if [[ -n "$latest_ver" ]]; then
-            real_claude="$VERSIONS_DIR/$latest_ver/claude"
+            real_claude=$(_version_binary "$latest_ver")
         fi
     fi
     if [[ -n "$real_claude" ]] && [[ -x "$real_claude" ]]; then
@@ -1658,13 +1754,18 @@ PYEOF
     local os; os=$(_detect_os)
     _write_wrapper
 
-    # Shims
-    _write_hostname_shim
-    _write_ifconfig_shim
-    if [[ "$os" == "macos" ]]; then
-        _write_ioreg_shim
-    elif [[ "$os" == "linux" ]]; then
-        _write_machine_id_shim
+    # Windows: add cac bin to User PATH
+    _add_to_user_path "$CAC_DIR/bin"
+
+    # Shims (skip on Windows — fingerprint-hook.js covers it)
+    if [[ "$os" != "windows" ]]; then
+        _write_hostname_shim
+        _write_ifconfig_shim
+        if [[ "$os" == "macos" ]]; then
+            _write_ioreg_shim
+        elif [[ "$os" == "linux" ]]; then
+            _write_machine_id_shim
+        fi
     fi
 
     # mTLS CA
@@ -1677,6 +1778,8 @@ PYEOF
 _env_cmd_create() {
     _require_setup
     local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona=""
+    # Windows: force copy mode (NTFS symlinks require admin privileges)
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1736,7 +1839,7 @@ _env_cmd_create() {
         ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
         if [[ -n "$ip_info" ]]; then
             local detected_tz country_code
-            read -r detected_tz country_code < <(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''), d.get('countryCode',''))" 2>/dev/null || echo "")
+            read -r detected_tz country_code < <(echo "$ip_info" | node -e "const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));process.stdout.write((d.timezone||'')+' '+(d.countryCode||''))" 2>/dev/null || echo "")
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
             if [[ -n "$country_code" ]]; then
                 case "$country_code" in
@@ -1828,23 +1931,13 @@ _env_cmd_create() {
             fi
             if [[ -f "$src_claude_dir/settings.json" ]]; then
                 cp "$env_dir/.claude/settings.json" "$env_dir/.claude/settings.override.json"
-                python3 - "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json" << 'MERGE_EOF'
-import json, sys
-base = json.load(open(sys.argv[1]))
-override = json.load(open(sys.argv[2]))
-# Deep merge: override wins
-def merge(b, o):
-    r = dict(b)
-    for k, v in o.items():
-        if k in r and isinstance(r[k], dict) and isinstance(v, dict):
-            r[k] = merge(r[k], v)
-        else:
-            r[k] = v
-    return r
-result = merge(base, override)
-with open(sys.argv[3], 'w') as f:
-    json.dump(result, f, indent=2, ensure_ascii=False)
-MERGE_EOF
+                node -e "
+const fs=require('fs');
+const base=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
+const override=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+function merge(b,o){const r={...b};for(const[k,v]of Object.entries(o)){if(k in r&&typeof r[k]==='object'&&r[k]!==null&&typeof v==='object'&&v!==null&&!Array.isArray(r[k])&&!Array.isArray(v)){r[k]=merge(r[k],v)}else{r[k]=v}}return r}
+fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
+" "$src_claude_dir/settings.json" "$env_dir/.claude/settings.override.json" "$env_dir/.claude/settings.json"
             fi
             # Store clone source for wrapper merge-on-startup
             echo "$src_claude_dir" > "$env_dir/clone_source"
@@ -2134,7 +2227,7 @@ _relay_start() {
 
     # find available port (17890-17999)
     local port=17890
-    while (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; do
+    while _tcp_check 127.0.0.1 "$port"; do
         (( port++ ))
         if [[ $port -gt 17999 ]]; then
             echo "error: all ports 17890-17999 occupied" >&2
@@ -2149,11 +2242,11 @@ _relay_start() {
     # wait for relay ready
     local _i
     for _i in {1..30}; do
-        (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null && break
+        _tcp_check 127.0.0.1 "$port" && break
         sleep 0.1
     done
 
-    if ! (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null; then
+    if ! _tcp_check 127.0.0.1 "$port"; then
         echo "error: relay startup timeout" >&2
         return 1
     fi
@@ -2212,7 +2305,10 @@ _relay_add_route() {
 
     # resolve to IP
     local proxy_ip
-    proxy_ip=$(python3 -c "import socket; print(socket.gethostbyname('$proxy_host'))" 2>/dev/null || echo "$proxy_host")
+    proxy_ip=$(node -e "
+const dns = require('dns');
+dns.lookup(process.argv[1], { family: 4 }, (err, addr) => process.stdout.write(err ? process.argv[1] : addr));
+" "$proxy_host" 2>/dev/null || echo "$proxy_host")
 
     local os; os=$(_detect_os)
     if [[ "$os" == "macos" ]]; then
@@ -2238,6 +2334,14 @@ _relay_add_route() {
         echo "  adding direct route: $proxy_ip -> $gateway dev $iface (needs sudo)"
         sudo ip route add "$proxy_ip/32" via "$gateway" dev "$iface" 2>/dev/null || return 1
         echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
+    elif [[ "$os" == "windows" ]]; then
+        local gateway
+        gateway=$(route.exe print 0.0.0.0 2>/dev/null | awk '/^[ ]*0\.0\.0\.0[ ]+0\.0\.0\.0/ { print $3; exit }')
+        [[ -z "$gateway" ]] && return 1
+
+        echo "  adding direct route: $proxy_ip -> $gateway (route.exe, admin required)"
+        route.exe ADD "$proxy_ip" MASK 255.255.255.255 "$gateway" METRIC 1 >/dev/null 2>&1 || return 1
+        echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
     fi
 }
 
@@ -2253,6 +2357,8 @@ _relay_remove_route() {
         sudo route delete -host "$proxy_ip" >/dev/null 2>&1 || true
     elif [[ "$os" == "linux" ]]; then
         sudo ip route del "$proxy_ip/32" 2>/dev/null || true
+    elif [[ "$os" == "windows" ]]; then
+        route.exe DELETE "$proxy_ip" >/dev/null 2>&1 || true
     fi
     rm -f "$route_file"
 }
@@ -2266,6 +2372,8 @@ _detect_tun_active() {
         [[ "$tun_count" -gt 3 ]]
     elif [[ "$os" == "linux" ]]; then
         ip link show tun0 >/dev/null 2>&1
+    elif [[ "$os" == "windows" ]]; then
+        ipconfig.exe 2>/dev/null | grep -qiE "TAP|TUN|Wintun|WireGuard|VPN"
     else
         return 1
     fi
@@ -2473,7 +2581,13 @@ cmd_check() {
     [[ -f "$_cj" ]] || _cj="$HOME/.claude.json"
     if [[ -f "$_cj" ]]; then
         local _actual_uid
-        _actual_uid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('userID',''))" "$_cj" 2>/dev/null || true)
+        _actual_uid=$(node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.userID || '');
+} catch (_) {}
+" "$_cj" 2>/dev/null || true)
         if [[ -n "$_actual_uid" ]]; then
             (( _id_total++ )) || true
             echo "$_actual_uid" > "$env_dir/user_id" 2>/dev/null || true
@@ -2506,6 +2620,10 @@ cmd_check() {
         local ipv6_addrs
         ipv6_addrs=$(ip -6 addr show scope global 2>/dev/null | grep -c "inet6" || true)
         [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
+    elif [[ "$os" == "windows" ]]; then
+        local ipv6_addrs
+        ipv6_addrs=$(ipconfig.exe 2>/dev/null | grep -ci "IPv6 Address" || true)
+        [[ "$ipv6_addrs" -gt 0 ]] && ipv6_leak=true
     fi
     if [[ "$ipv6_leak" == "true" ]]; then
         echo "    $(_yellow "⚠") IPv6       global address detected (potential leak)"
@@ -2522,7 +2640,7 @@ cmd_check() {
         fi
     fi
     local _claude_count
-    _claude_count=$(pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]') || _claude_count=0
+    _claude_count=$(_count_claude_processes)
     local _max_sessions; _max_sessions=$(_cac_setting max_sessions 10)
     if [[ "$_claude_count" -gt "$_max_sessions" ]]; then
         echo "    $(_yellow "⚠") sessions   $_claude_count running (threshold: $_max_sessions)"
@@ -2557,7 +2675,13 @@ cmd_check() {
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
                     local ip_tz
                     ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
-                        python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone',''))" 2>/dev/null || true)
+                        node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+  process.stdout.write(d.timezone || '');
+} catch (_) {}
+" 2>/dev/null || true)
                     if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
                         echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
                         problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")
@@ -2583,6 +2707,8 @@ cmd_check() {
                 [[ "$tun_count" -gt 3 ]] && has_conflict=true
             elif [[ "$os" == "linux" ]]; then
                 ip link show tun0 >/dev/null 2>&1 && has_conflict=true
+            elif [[ "$os" == "windows" ]]; then
+                ipconfig.exe 2>/dev/null | grep -qiE "TAP|TUN|Wintun|WireGuard|VPN" && has_conflict=true
             fi
 
             if [[ "$has_conflict" == "true" ]]; then
@@ -2705,7 +2831,7 @@ _download_version() {
     local ver="$1"
     local platform; platform=$(_detect_platform) || _die "unsupported platform"
     local dest_dir="$VERSIONS_DIR/$ver"
-    local dest="$dest_dir/claude"
+    local dest=$(_version_binary "$ver")
 
     if [[ -x "$dest" ]]; then
         echo "  Already installed: $(_cyan "$ver")"
@@ -2725,10 +2851,9 @@ _download_version() {
     echo "done"
 
     local checksum=""
-    checksum=$(echo "$manifest" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('platforms',{}).get(sys.argv[1],{}).get('checksum',''))
+    checksum=$(echo "$manifest" | node -e "
+const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+process.stdout.write((d.platforms||{})[process.argv[1]]||'').checksum||'')
 " "$platform" 2>/dev/null || true)
 
     if [[ -z "$checksum" ]] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
@@ -2736,8 +2861,13 @@ print(d.get('platforms',{}).get(sys.argv[1],{}).get('checksum',''))
         _die "platform $(_cyan "$platform") not in manifest"
     fi
 
+    local binary_name="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary_name="claude.exe" ;;
+    esac
+
     echo "  Downloading $(_cyan "claude $ver") ($(_dim "$platform"))"
-    if ! curl -fL --progress-bar -o "$dest" "$_GCS_BUCKET/$ver/$platform/claude" 2>&1; then
+    if ! curl -fL --progress-bar -o "$dest" "$_GCS_BUCKET/$ver/$platform/$binary_name" 2>&1; then
         rm -rf "$dest_dir"
         _die "download failed"
     fi
@@ -2937,7 +3067,7 @@ _dk_env_file=""
 _dk_compose_base=()
 _dk_service="cac"
 _dk_shim_if="cac-docker-shim"
-_dk_port_dir="/tmp/cac-docker-ports"
+_dk_port_dir="${TMPDIR:-${TEMP:-/tmp}}/cac-docker-ports"
 _dk_image="ghcr.io/nmhjklnm/cac-docker:latest"
 
 _dk_init() {
@@ -3086,25 +3216,15 @@ _dk_port_forward() {
 
   if command -v socat &>/dev/null; then
     socat TCP-LISTEN:"$port",fork,reuseaddr,bind=127.0.0.1 TCP:"${cip}":"$port" &
-  elif command -v python3 &>/dev/null; then
-    python3 -c "
-import socket, threading
-def fwd(src, dst):
-    try:
-        while d := src.recv(4096):
-            dst.sendall(d)
-    except: pass
-    finally: src.close(); dst.close()
-s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('127.0.0.1', $port)); s.listen(8)
-while True:
-    c, _ = s.accept()
-    r = socket.create_connection(('$cip', $port))
-    threading.Thread(target=fwd, args=(c,r), daemon=True).start()
-    threading.Thread(target=fwd, args=(r,c), daemon=True).start()
+  elif command -v node &>/dev/null; then
+    node -e "
+const net=require('net');
+const srv=net.createServer(s=>{const r=net.connect($port,'$cip',()=>{s.pipe(r);r.pipe(s)});r.on('error',()=>s.destroy())});
+srv.listen($port,'127.0.0.1',()=>{});
+srv.on('error',()=>{});
 " &
   else
-    _err "Need socat or python3 for port forwarding"
+    _err "Need socat or node for port forwarding"
     return 1
   fi
   local pid=$!
@@ -3450,7 +3570,18 @@ cmd_delete() {
         fi
 
         # fallback: clean up orphaned relay processes
-        pkill -f "node.*\.cac/relay\.js" 2>/dev/null || true
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                # Windows: use tasklist + taskkill
+                while IFS= read -r _pid; do
+                    taskkill.exe //F //PID "$_pid" 2>/dev/null || true
+                done < <(tasklist.exe //FI "IMAGENAME eq node.exe" //FO CSV //NH 2>/dev/null \
+                    | grep -i "relay\.js" | sed 's/"//g' | cut -d',' -f2)
+                ;;
+            *)
+                pkill -f "node.*\.cac/relay\.js" 2>/dev/null || true
+                ;;
+        esac
 
         rm -rf "$CAC_DIR"
         echo "  ✓ deleted $CAC_DIR"
@@ -3552,4 +3683,3 @@ case "$1" in
     delete|uninstall)   echo "$(_yellow "warning:") 'cac delete' → 'cac self delete'" >&2; cmd_delete ;;
     *)                  _env_cmd_activate "$1" ;;
 esac
-

@@ -89,7 +89,10 @@ _relay_add_route() {
 
     # resolve to IP
     local proxy_ip
-    proxy_ip=$(node -e "require('dns').lookup('$proxy_host',(e,a)=>{if(e)process.exit(1);process.stdout.write(a)})" 2>/dev/null || echo "$proxy_host")
+    proxy_ip=$(node -e "
+const dns = require('dns');
+dns.lookup(process.argv[1], { family: 4 }, (err, addr) => process.stdout.write(err ? process.argv[1] : addr));
+" "$proxy_host" 2>/dev/null || echo "$proxy_host")
 
     local os; os=$(_detect_os)
     if [[ "$os" == "macos" ]]; then
@@ -115,6 +118,14 @@ _relay_add_route() {
         echo "  adding direct route: $proxy_ip -> $gateway dev $iface (needs sudo)"
         sudo ip route add "$proxy_ip/32" via "$gateway" dev "$iface" 2>/dev/null || return 1
         echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
+    elif [[ "$os" == "windows" ]]; then
+        local gateway
+        gateway=$(route.exe print 0.0.0.0 2>/dev/null | awk '/^[ ]*0\.0\.0\.0[ ]+0\.0\.0\.0/ { print $3; exit }')
+        [[ -z "$gateway" ]] && return 1
+
+        echo "  adding direct route: $proxy_ip -> $gateway (route.exe, admin required)"
+        route.exe ADD "$proxy_ip" MASK 255.255.255.255 "$gateway" METRIC 1 >/dev/null 2>&1 || return 1
+        echo "$proxy_ip" > "$CAC_DIR/relay_route_ip"
     fi
 }
 
@@ -130,6 +141,8 @@ _relay_remove_route() {
         sudo route delete -host "$proxy_ip" >/dev/null 2>&1 || true
     elif [[ "$os" == "linux" ]]; then
         sudo ip route del "$proxy_ip/32" 2>/dev/null || true
+    elif [[ "$os" == "windows" ]]; then
+        route.exe DELETE "$proxy_ip" >/dev/null 2>&1 || true
     fi
     rm -f "$route_file"
 }
@@ -143,6 +156,8 @@ _detect_tun_active() {
         [[ "$tun_count" -gt 3 ]]
     elif [[ "$os" == "linux" ]]; then
         ip link show tun0 >/dev/null 2>&1
+    elif [[ "$os" == "windows" ]]; then
+        ipconfig.exe 2>/dev/null | grep -qiE "TAP|TUN|Wintun|WireGuard|VPN"
     else
         return 1
     fi

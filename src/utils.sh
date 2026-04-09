@@ -13,7 +13,14 @@ _cac_setting() {
     local settings="$CAC_DIR/settings.json"
     [[ -f "$settings" ]] || { echo "$default"; return; }
     local val
-    val=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(d[process.argv[2]]||'')" "$settings" "$key" 2>/dev/null || true)
+    val=$(node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  const v = d[process.argv[2]];
+  process.stdout.write(v == null ? '' : String(v));
+} catch (_) {}
+" "$settings" "$key" 2>/dev/null || true)
     val="${val:-$default}"
     # Sync hot-path keys as plain files (avoids node spawn in wrapper)
     [[ "$key" == "max_sessions" ]] && echo "$val" > "$CAC_DIR/max_sessions"
@@ -104,21 +111,19 @@ _proxy_host_port() {
 
 _tcp_check() {
     local host="$1" port="$2" timeout_sec="${3:-2}"
-    case "$(uname -s)" in
-        MINGW*|MSYS*|CYGWIN*)
-            # Git Bash: /dev/tcp 不可用，使用 Node.js
-            node -e "
-                const net = require('net');
-                const s = net.connect(${port}, '${host}', () => { s.destroy(); process.exit(0); });
-                s.on('error', () => process.exit(1));
-                setTimeout(() => { s.destroy(); process.exit(1); }, ${timeout_sec} * 1000);
-            " 2>/dev/null
-            ;;
-        *)
-            # Unix: /dev/tcp 可用
-            (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
-            ;;
-    esac
+    if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
+        return 0
+    fi
+    node -e "
+const net = require('net');
+const host = process.argv[1];
+const port = Number(process.argv[2]);
+const timeoutMs = Number(process.argv[3]) * 1000;
+const s = net.createConnection({ host, port, timeout: timeoutMs });
+s.on('connect', () => { s.destroy(); process.exit(0); });
+s.on('timeout', () => { s.destroy(); process.exit(1); });
+s.on('error', () => process.exit(1));
+" "$host" "$port" "$timeout_sec" >/dev/null 2>&1
 }
 
 _proxy_reachable() {
@@ -240,24 +245,26 @@ _detect_platform() {
 
 _sha256() {
     local file="$1"
-    local hash=""
-    case "$(uname -s)" in
-        Darwin) hash=$(shasum -a 256 "$file" 2>/dev/null | cut -d' ' -f1) ;;
-        *)      hash=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1) ;;
-    esac
-    # Fallback to Node.js if system tool not available
-    if [[ -z "$hash" ]]; then
-        hash=$(node -e "const h=require('crypto').createHash('sha256');h.update(require('fs').readFileSync(process.argv[1]));process.stdout.write(h.digest('hex'))" "$file" 2>/dev/null)
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d' ' -f1
+    else
+        node -e "
+const fs = require('fs');
+const crypto = require('crypto');
+const b = fs.readFileSync(process.argv[1]);
+process.stdout.write(crypto.createHash('sha256').update(b).digest('hex'));
+" "$file"
     fi
-    echo "$hash"
 }
 
 _count_claude_processes() {
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
-            # Windows: 使用 tasklist.exe
-            tasklist.exe /FI "IMAGENAME eq claude.exe" /NH 2>/dev/null \
-                | grep -ic "claude.exe" || echo 0
+            tasklist.exe //FO CSV //NH 2>/dev/null \
+                | tr -d '\r' \
+                | awk -F',' 'tolower($1) ~ /^"claude(\.exe)?"$/ { c++ } END { print c+0 }'
             ;;
         *)
             pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0
@@ -444,16 +451,19 @@ _update_claude_json_user_id() {
     fi
 
     node -e "
-const fs=require('fs'),p=require('path');
-const fpath=process.argv[1],uid=process.argv[2],fst=process.argv[3]||'';
-let d=JSON.parse(fs.readFileSync(fpath,'utf8'));
+const fs = require('fs');
+const crypto = require('crypto');
+const fpath = process.argv[1];
+const uid = process.argv[2];
+const fst = process.argv[3] || '';
+const d = JSON.parse(fs.readFileSync(fpath, 'utf8'));
 d.userID=uid;
-d.anonymousId='claudecode.v1.'+require('crypto').randomUUID();
+d.anonymousId='claudecode.v1.'+crypto.randomUUID();
 delete d.numStartups;
 if(fst){d.firstStartTime=fst;}else{delete d.firstStartTime;}
 delete d.cachedGrowthBookFeatures;
 delete d.cachedStatsigGates;
-fs.writeFileSync(fpath,JSON.stringify(d,null,2));
+fs.writeFileSync(fpath, JSON.stringify(d, null, 2) + '\n');
 " "$claude_json" "$user_id" "$fst"
     [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
 }

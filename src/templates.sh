@@ -521,7 +521,13 @@ WRAPPER_EOF
         MINGW*|MSYS*|CYGWIN*)
             cat > "$CAC_DIR/bin/claude.cmd" << 'CMDEOF'
 @echo off
-bash "%~dpn0" %*
+setlocal
+set "SCRIPT_DIR=%~dp0"
+for %%I in ("%SCRIPT_DIR%.") do set "SCRIPT_DIR=%%~fI"
+"%ProgramFiles%\Git\bin\bash.exe" "%SCRIPT_DIR%\claude" %*
+if errorlevel 9009 (
+  bash "%SCRIPT_DIR%\claude" %*
+)
 CMDEOF
             ;;
     esac

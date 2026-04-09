@@ -30,7 +30,7 @@ echo ""
 echo "[T01] 平台检测"
 p=$(_detect_platform)
 if is_windows; then
-    [[ "$p" =~ ^win- ]] && pass "Windows 平台: $p" || fail "期望 win-*, 实际: $p"
+    [[ "$p" =~ ^win32- ]] && pass "Windows 平台: $p" || fail "期望 win32-*, 实际: $p"
 elif is_linux; then
     [[ "$p" =~ ^linux- ]] && pass "Linux 平台: $p" || fail "期望 linux-*, 实际: $p"
 else

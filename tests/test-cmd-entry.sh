@@ -36,7 +36,8 @@ echo ""
 echo "[E04] claude.cmd 生成模板"
 grep -q 'claude.cmd' "$PROJECT_DIR/src/templates.sh" && pass "templates.sh 包含 claude.cmd 生成" || fail "缺 claude.cmd 生成"
 grep -q '@echo off' "$PROJECT_DIR/src/templates.sh" && pass "包含 @echo off" || fail "缺 @echo off"
-grep -q 'bash.*%~dpn0' "$PROJECT_DIR/src/templates.sh" && pass "调用 bash wrapper" || fail "claude.cmd 未调用 bash"
+grep -q 'Git\\bin\\bash.exe' "$PROJECT_DIR/src/templates.sh" && pass "包含 Git Bash fallback" || fail "缺 Git Bash fallback"
+grep -q 'bash "%SCRIPT_DIR%\\claude"' "$PROJECT_DIR/src/templates.sh" && pass "调用 bash wrapper" || fail "claude.cmd 未调用 bash"
 
 # ── E05: PATH 管理 ──
 echo ""
