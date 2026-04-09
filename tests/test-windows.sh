@@ -207,7 +207,12 @@ grep -q 'http://ip-api.com/json/?fields=query,timezone' "$PROJECT_DIR/src/cmd_ch
 echo ""
 echo "[T18] Windows OpenSSL 选择"
 grep -q '^_openssl()' "$PROJECT_DIR/src/mtls.sh" && pass "_openssl helper 已定义" || fail "_openssl helper 未定义"
-grep -q '/mingw64/bin/openssl.exe' "$PROJECT_DIR/src/mtls.sh" && pass "优先使用 MinGW OpenSSL" || fail "未优先使用 MinGW OpenSSL"
+grep -q '/c/Development/Git/mingw64/bin/openssl.exe' "$PROJECT_DIR/src/mtls.sh" && pass "优先使用显式 Git OpenSSL 路径" || fail "未优先使用显式 Git OpenSSL 路径"
+
+# ── T19: env check read 兼容 set -e ──
+echo ""
+echo "[T19] env check read 兼容 set -e"
+grep -q 'read -r proxy_ip ip_tz .*|| true' "$PROJECT_DIR/src/cmd_check.sh" && pass "proxy metadata read 已防止提前退出" || fail "proxy metadata read 仍可能提前退出"
 
 # ── 总结 ──
 echo ""

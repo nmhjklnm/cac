@@ -215,7 +215,7 @@ try {
   const d = JSON.parse(fs.readFileSync(0, 'utf8'));
   process.stdout.write((d.query || '') + ' ' + (d.timezone || ''));
 } catch (_) {}
-" 2>/dev/null || true)
+" 2>/dev/null || true) || true
             fi
 
             # Fast retry with dots: each attempt adds a dot

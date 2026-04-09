@@ -87,7 +87,8 @@ cac env check
 
 这表示 `%USERPROFILE%\.cac\ca\ca_cert.pem` 不存在。  
 常见原因是旧版 Windows 初始化阶段没有成功生成 CA，之后又因为 wrapper 已存在而没有重试。  
-在 Git for Windows 上，另一个常见原因是误用了 `usr\bin\openssl.exe`，它在某些 PowerShell / CMD 启动链路下会直接失败，只留下 `ca_key.pem`，不会生成 `ca_cert.pem`。
+在 Git for Windows 上，另一个常见原因是误用了 `usr\bin\openssl.exe`，它在某些 PowerShell / CMD 启动链路下会直接失败，只留下 `ca_key.pem`，不会生成 `ca_cert.pem`。  
+当前修复版会优先使用 Git 安装目录下明确可用的 `mingw64\bin\openssl.exe`，绕开这类兼容性问题。
 
 ### 快速修复
 

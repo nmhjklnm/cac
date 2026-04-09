@@ -4,19 +4,19 @@ _openssl() {
     local openssl_bin="openssl"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
-            # Prefer the native MinGW OpenSSL shipped with Git for Windows.
+            # Prefer explicit Git for Windows MinGW paths.
             # /usr/bin/openssl.exe can fail with "couldn't create signal pipe"
             # when invoked from non-MSYS parent processes.
-            if [[ -x "/mingw64/bin/openssl.exe" ]]; then
+            if [[ -x "/c/Development/Git/mingw64/bin/openssl.exe" ]]; then
+                openssl_bin="/c/Development/Git/mingw64/bin/openssl.exe"
+            elif [[ -x "/c/Program Files/Git/mingw64/bin/openssl.exe" ]]; then
+                openssl_bin="/c/Program Files/Git/mingw64/bin/openssl.exe"
+            elif [[ -x "/mingw64/bin/openssl.exe" ]]; then
                 openssl_bin="/mingw64/bin/openssl.exe"
             elif [[ -x "/ucrt64/bin/openssl.exe" ]]; then
                 openssl_bin="/ucrt64/bin/openssl.exe"
             elif [[ -x "/clang64/bin/openssl.exe" ]]; then
                 openssl_bin="/clang64/bin/openssl.exe"
-            elif [[ -x "/c/Development/Git/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/c/Development/Git/mingw64/bin/openssl.exe"
-            elif [[ -x "/c/Program Files/Git/mingw64/bin/openssl.exe" ]]; then
-                openssl_bin="/c/Program Files/Git/mingw64/bin/openssl.exe"
             fi
             ;;
     esac
