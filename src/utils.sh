@@ -235,10 +235,17 @@ _detect_platform() {
 }
 
 _sha256() {
+    local file="$1"
+    local hash=""
     case "$(uname -s)" in
-        Darwin) shasum -a 256 "$1" | cut -d' ' -f1 ;;
-        *)      sha256sum "$1" | cut -d' ' -f1 ;;
+        Darwin) hash=$(shasum -a 256 "$file" 2>/dev/null | cut -d' ' -f1) ;;
+        *)      hash=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1) ;;
     esac
+    # Fallback to Node.js if system tool not available
+    if [[ -z "$hash" ]]; then
+        hash=$(node -e "const h=require('crypto').createHash('sha256');h.update(require('fs').readFileSync(process.argv[1]));process.stdout.write(h.digest('hex'))" "$file" 2>/dev/null)
+    fi
+    echo "$hash"
 }
 
 # Ensure a Claude Code version is installed (just-in-time, like uv)
