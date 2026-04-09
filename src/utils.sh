@@ -457,3 +457,36 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2));
 " "$claude_json" "$user_id" "$fst"
     [[ $? -eq 0 ]] || echo "warning: failed to update claude.json userID" >&2
 }
+
+# ── Windows PATH helper ────────────────────────────────────
+_add_to_user_path() {
+    local dir="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            local win_path
+            win_path="$(cygpath -w "$dir" 2>/dev/null || echo "$dir")"
+            # Check if already in User PATH via powershell
+            local in_path
+            in_path="$(powershell.exe -NoProfile -Command "
+                \$current = [Environment]::GetEnvironmentVariable('Path','User')
+                if (\$current -split ';' -contains '$win_path') { 'yes' } else { 'no' }
+            " 2>/dev/null | tr -d '\r')"
+            if [[ "$in_path" == "yes" ]]; then
+                _log "PATH already includes $dir"
+                return 0
+            fi
+            powershell.exe -NoProfile -Command "
+                \$current = [Environment]::GetEnvironmentVariable('Path','User')
+                [Environment]::SetEnvironmentVariable('Path', \"\$current;$win_path\", 'User')
+            " 2>/dev/null
+            if [[ $? -eq 0 ]]; then
+                _log "Added $dir to User PATH (restart terminal to take effect)"
+            else
+                _warn "Failed to add $dir to User PATH"
+            fi
+            ;;
+        *)
+            _warn "PATH modification only supported on Windows"
+            ;;
+    esac
+}
