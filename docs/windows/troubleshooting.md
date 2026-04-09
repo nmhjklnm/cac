@@ -86,7 +86,8 @@ cac env check
 ## `cac env check` 显示 `mTLS ✗ CA cert not found`
 
 这表示 `%USERPROFILE%\.cac\ca\ca_cert.pem` 不存在。  
-常见原因是旧版 Windows 初始化阶段没有成功生成 CA，之后又因为 wrapper 已存在而没有重试。
+常见原因是旧版 Windows 初始化阶段没有成功生成 CA，之后又因为 wrapper 已存在而没有重试。  
+在 Git for Windows 上，另一个常见原因是误用了 `usr\bin\openssl.exe`，它在某些 PowerShell / CMD 启动链路下会直接失败，只留下 `ca_key.pem`，不会生成 `ca_cert.pem`。
 
 ### 快速修复
 
@@ -115,8 +116,11 @@ dir $env:USERPROFILE\.cac\envs\main\client_cert.pem
 dir $env:USERPROFILE\.cac\envs\main\client_key.pem
 ```
 
+如果你只看到 `ca_key.pem`，但没有 `ca_cert.pem`，就是典型的 Windows OpenSSL 选择问题。
+
 ### 仍然失败时
 
 - 确认 `cac` 是当前仓库修复后的版本，而不是旧的全局 shim
 - 确认 Git for Windows 安装完整，Git Bash 可正常启动
 - 如果 `ca` 目录仍为空，优先检查 Git Bash 里的 `openssl` 是否可用
+- 如果 `ca` 目录里只有 `ca_key.pem`，重新执行 `cac main` 让新版逻辑用 MinGW OpenSSL 补生成证书

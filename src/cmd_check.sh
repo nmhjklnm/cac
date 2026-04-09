@@ -204,31 +204,48 @@ try {
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
         else
+            local ip_tz=""
+            local proxy_meta=""
+            proxy_meta=$(curl -s --proxy "$proxy" --connect-timeout 5 --max-time 8 \
+                "http://ip-api.com/json/?fields=query,timezone" 2>/dev/null || true)
+            if [[ -n "$proxy_meta" ]]; then
+                read -r proxy_ip ip_tz < <(printf '%s' "$proxy_meta" | node -e "
+const fs = require('fs');
+try {
+  const d = JSON.parse(fs.readFileSync(0, 'utf8'));
+  process.stdout.write((d.query || '') + ' ' + (d.timezone || ''));
+} catch (_) {}
+" 2>/dev/null || true)
+            fi
+
             # Fast retry with dots: each attempt adds a dot
-            local _ip_url _dots=""
-            local _urls="https://api.ip.sb/ip https://ip.3322.net https://api.ipify.org https://ipinfo.io/ip https://api.ip.sb/ip"
-            for _ip_url in $_urls; do
-                _dots="${_dots}."
-                printf "\r    · exit IP    $(_dim "detecting${_dots}")"
-                proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
-                [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
-                proxy_ip=""
-            done
+            if [[ -z "$proxy_ip" ]]; then
+                local _ip_url _dots=""
+                local _urls="https://api.ip.sb/ip https://api.ipify.org https://ipinfo.io/ip https://api.ip.sb/ip"
+                for _ip_url in $_urls; do
+                    _dots="${_dots}."
+                    printf "\r    · exit IP    $(_dim "detecting${_dots}")"
+                    proxy_ip=$(curl --proxy "$proxy" --connect-timeout 3 --max-time 6 "$_ip_url" 2>/dev/null || true)
+                    [[ "$proxy_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+                    proxy_ip=""
+                done
+            fi
             # Overwrite the "detecting..." line
             if [[ -n "$proxy_ip" ]]; then
                 printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")\033[K\n"
                 # TZ vs exit IP consistency check
                 local env_tz; env_tz=$(_read "$env_dir/tz" "")
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then
-                    local ip_tz
-                    ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
-                        node -e "
+                    if [[ -z "$ip_tz" ]]; then
+                        ip_tz=$(curl -s --proxy "$proxy" --connect-timeout 5 "http://ip-api.com/json/$proxy_ip?fields=timezone" 2>/dev/null | \
+                            node -e "
 const fs = require('fs');
 try {
   const d = JSON.parse(fs.readFileSync(0, 'utf8'));
   process.stdout.write(d.timezone || '');
 } catch (_) {}
-" 2>/dev/null || true)
+ " 2>/dev/null || true)
+                    fi
                     if [[ -n "$ip_tz" ]] && [[ "$ip_tz" != "$env_tz" ]]; then
                         echo "    $(_yellow "⚠") TZ        mismatch: env=$env_tz, IP=$ip_tz"
                         problems+=("TZ mismatch: env=$env_tz vs IP=$ip_tz")

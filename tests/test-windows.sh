@@ -197,6 +197,18 @@ echo "[T16] mTLS 自愈钩子"
 grep -q '_generate_ca_cert' "$PROJECT_DIR/src/cmd_setup.sh" && pass "初始化包含 CA 重试" || fail "初始化缺少 CA 重试"
 grep -q '_generate_client_cert "$name"' "$PROJECT_DIR/src/cmd_env.sh" && pass "激活包含 client cert 回填" || fail "激活缺少 client cert 回填"
 
+# ── T17: 出口 IP 检测源 ──
+echo ""
+echo "[T17] 出口 IP 检测源"
+grep -q 'http://ip-api.com/json/?fields=query,timezone' "$PROJECT_DIR/src/cmd_check.sh" && pass "优先使用 ip-api 当前连接检测" || fail "缺少 ip-api 当前连接检测"
+! grep -q 'ip.3322.net' "$PROJECT_DIR/src/cmd_check.sh" && pass "已移除 ip.3322.net" || fail "仍然使用 ip.3322.net"
+
+# ── T18: Windows OpenSSL 选择 ──
+echo ""
+echo "[T18] Windows OpenSSL 选择"
+grep -q '^_openssl()' "$PROJECT_DIR/src/mtls.sh" && pass "_openssl helper 已定义" || fail "_openssl helper 未定义"
+grep -q '/mingw64/bin/openssl.exe' "$PROJECT_DIR/src/mtls.sh" && pass "优先使用 MinGW OpenSSL" || fail "未优先使用 MinGW OpenSSL"
+
 # ── 总结 ──
 echo ""
 echo "════════════════════════════════════════════════════════"
