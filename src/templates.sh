@@ -515,6 +515,16 @@ WRAPPER_EOF
     local _tmp="$CAC_DIR/bin/claude.tmp"
     sed "s/__CAC_VER__/$CAC_VERSION/" "$CAC_DIR/bin/claude" > "$_tmp" && mv "$_tmp" "$CAC_DIR/bin/claude"
     chmod +x "$CAC_DIR/bin/claude"
+
+    # Windows: also generate claude.cmd that launches bash wrapper
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            cat > "$CAC_DIR/bin/claude.cmd" << 'CMDEOF'
+@echo off
+bash "%~dpn0" %*
+CMDEOF
+            ;;
+    esac
 }
 
 _write_ioreg_shim() {
