@@ -102,6 +102,8 @@ cac env rm <name>                       # 删除环境
 cac env set [name] proxy <url>          # 设置 / 修改代理
 cac env set [name] proxy --remove       # 移除代理
 cac env set [name] version <ver>        # 切换版本
+cac env set [name] timezone <IANA_TZ>   # 设置时区，例如 America/Los_Angeles
+cac env set [name] language <locale>    # 设置语言，例如 en_US.UTF-8 或 en-US
 cac <name>                              # 激活环境（快捷方式）
 cac ls                                  # = cac env ls
 ```
@@ -125,7 +127,7 @@ cac ls                                  # = cac env ls
 | `cac env create <name> [-p proxy] [-c ver] [--clone] [--telemetry mode] [--persona preset]` | 创建环境（自动激活，`--telemetry transparent/stealth/paranoid` 控制遥测，`--persona macos-vscode/...` 用于容器） |
 | `cac env ls` | 列出环境 |
 | `cac env rm <name>` | 删除环境 |
-| `cac env set [name] <key> <value>` | 修改环境（proxy / version / telemetry / persona） |
+| `cac env set [name] <key> <value>` | 修改环境（proxy / version / timezone / language / telemetry / persona） |
 | `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
 | `cac <name>` | 激活环境 |
 | **自管理** | |
@@ -287,6 +289,8 @@ cac env rm <name>                       # remove environment
 cac env set [name] proxy <url>          # set / change proxy
 cac env set [name] proxy --remove       # remove proxy
 cac env set [name] version <ver>        # change version
+cac env set [name] timezone <IANA_TZ>   # set timezone, e.g. America/Los_Angeles
+cac env set [name] language <locale>    # set LANG, e.g. en_US.UTF-8 or en-US
 cac <name>                              # activate (shortcut)
 cac ls                                  # = cac env ls
 ```
@@ -310,7 +314,7 @@ Each environment is fully isolated:
 | `cac env create <name> [-p proxy] [-c ver] [--clone] [--telemetry mode] [--persona preset]` | Create environment (auto-activates, `--telemetry transparent/stealth/paranoid` for telemetry control, `--persona macos-vscode/...` for containers) |
 | `cac env ls` | List environments |
 | `cac env rm <name>` | Remove environment |
-| `cac env set [name] <key> <value>` | Modify environment (proxy / version / telemetry / persona) |
+| `cac env set [name] <key> <value>` | Modify environment (proxy / version / timezone / language / telemetry / persona) |
 | `cac env check [-d]` | Verify current environment (`-d` for details) |
 | `cac <name>` | Activate environment |
 | **Self-management** | |

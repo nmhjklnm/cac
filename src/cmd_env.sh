@@ -54,38 +54,15 @@ _env_cmd_create() {
         fi
     fi
 
-    # Geo-detect timezone (single request via proxy)
+    # Geo-detect timezone and locale (single request via proxy)
     local tz="America/New_York" lang="en_US.UTF-8"
     if [[ -n "$proxy_url" ]]; then
         printf "  $(_dim "Detecting timezone ...") "
-        local ip_info
-        ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
-        if [[ -n "$ip_info" ]]; then
-            local detected_tz country_code
-            read -r detected_tz country_code < <(echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''), d.get('countryCode',''))" 2>/dev/null || echo "")
+        local geo_info detected_tz detected_lang country_code
+        if geo_info=$(_geo_detect_tz_lang "$proxy_url"); then
+            IFS=$'\t' read -r detected_tz detected_lang country_code <<< "$geo_info"
             [[ -n "$detected_tz" ]] && tz="$detected_tz"
-            if [[ -n "$country_code" ]]; then
-                case "$country_code" in
-                    US) lang="en_US.UTF-8" ;;
-                    GB) lang="en_GB.UTF-8" ;;
-                    AU) lang="en_AU.UTF-8" ;;
-                    CA) lang="en_CA.UTF-8" ;;
-                    SG) lang="en_SG.UTF-8" ;;
-                    HK) lang="zh_HK.UTF-8" ;;
-                    TW) lang="zh_TW.UTF-8" ;;
-                    JP) lang="ja_JP.UTF-8" ;;
-                    KR) lang="ko_KR.UTF-8" ;;
-                    DE) lang="de_DE.UTF-8" ;;
-                    FR) lang="fr_FR.UTF-8" ;;
-                    ES) lang="es_ES.UTF-8" ;;
-                    IT) lang="it_IT.UTF-8" ;;
-                    PT|BR) lang="pt_BR.UTF-8" ;;
-                    RU) lang="ru_RU.UTF-8" ;;
-                    NL) lang="nl_NL.UTF-8" ;;
-                    IN) lang="en_IN.UTF-8" ;;
-                    *)  lang="en_US.UTF-8" ;;
-                esac
-            fi
+            [[ -n "$detected_lang" ]] && lang="$detected_lang"
             echo "$(_cyan "$tz") $(_dim "($country_code)")"
         else
             echo "$(_dim "default $tz")"
@@ -303,7 +280,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona"
+    local known_keys="proxy version telemetry persona timezone tz language lang"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -312,6 +289,12 @@ _env_cmd_set() {
         echo "    $(_green "set") [name] proxy <url>                       Set proxy"
         echo "    $(_green "set") [name] proxy --remove                  Remove proxy"
         echo "    $(_green "set") [name] version <ver|latest>            Change Claude version"
+        echo "    $(_green "set") [name] timezone <IANA_TZ|auto>         Set timezone"
+        echo "    $(_green "set") [name] timezone --remove               Remove timezone override"
+        echo "                                                          Accepts IANA names like America/Los_Angeles"
+        echo "    $(_green "set") [name] language <locale|tag|auto>      Set LANG locale"
+        echo "    $(_green "set") [name] language --remove               Remove LANG override"
+        echo "                                                          Accepts en_US.UTF-8 or en-US, normalizes to UTF-8 locale"
         echo "    $(_green "set") [name] telemetry <stealth|paranoid|transparent>"
         echo "                                                          Telemetry blocking: stealth (1p_events only), paranoid (max), transparent (none)"
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
@@ -333,7 +316,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|bypass> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|timezone|language|telemetry|persona> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -373,6 +356,58 @@ _env_cmd_set() {
             echo "$ver" > "$env_dir/version"
             echo "$(_green_bold "Set") version for $(_bold "$name") → $(_cyan "$ver")"
             ;;
+        timezone|tz)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/tz"
+                echo "$(_green_bold "Removed") timezone override from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] timezone <IANA_TZ|auto>"
+                if [[ "$value" == "auto" ]]; then
+                    local proxy_url geo_info detected_tz detected_lang country_code
+                    proxy_url=$(_read "$env_dir/proxy" "")
+                    [[ -n "$proxy_url" ]] || _die "cannot auto-detect timezone without a proxy configured"
+                    printf "  $(_dim "Detecting timezone ...") "
+                    if geo_info=$(_geo_detect_tz_lang "$proxy_url"); then
+                        IFS=$'\t' read -r detected_tz detected_lang country_code <<< "$geo_info"
+                        value="$detected_tz"
+                        echo "$(_cyan "$value") $(_dim "($country_code)")"
+                    else
+                        echo "$(_red "failed")"
+                        _die "failed to detect timezone from proxy exit IP"
+                    fi
+                else
+                    value=$(_validate_timezone "$value") || _die "invalid timezone '$value' (use an IANA name like America/Los_Angeles)"
+                fi
+                echo "$value" > "$env_dir/tz"
+                echo "$(_green_bold "Set") timezone for $(_bold "$name") → $(_cyan "$value")"
+            fi
+            ;;
+        language|lang)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/lang"
+                echo "$(_green_bold "Removed") language override from $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] language <locale|tag|auto>"
+                if [[ "$value" == "auto" ]]; then
+                    local proxy_url geo_info detected_tz detected_lang country_code
+                    proxy_url=$(_read "$env_dir/proxy" "")
+                    [[ -n "$proxy_url" ]] || _die "cannot auto-detect language without a proxy configured"
+                    printf "  $(_dim "Detecting language ...") "
+                    if geo_info=$(_geo_detect_tz_lang "$proxy_url"); then
+                        IFS=$'\t' read -r detected_tz detected_lang country_code <<< "$geo_info"
+                        value="$detected_lang"
+                        echo "$(_cyan "$value") $(_dim "($country_code)")"
+                    else
+                        echo "$(_red "failed")"
+                        _die "failed to detect language from proxy exit IP"
+                    fi
+                else
+                    value=$(_normalize_language "$value") || _die "invalid language '$value' (use a locale like en_US.UTF-8, a tag like en-US, or 'auto')"
+                fi
+                echo "$value" > "$env_dir/lang"
+                echo "$(_green_bold "Set") language for $(_bold "$name") → $(_cyan "$value")"
+            fi
+            ;;
         telemetry)
             [[ "$remove" != "true" ]] || _die "cannot remove telemetry mode"
             [[ -n "$value" ]] || _die "usage: cac env set [name] telemetry <stealth|paranoid|transparent>"
@@ -398,7 +433,7 @@ _env_cmd_set() {
             fi
             ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, or persona"
+            _die "unknown key '$key' — use proxy, version, timezone, language, telemetry, or persona"
             ;;
     esac
 }
@@ -427,7 +462,7 @@ cmd_env() {
             echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, or persona"
+            echo "                             proxy, version, timezone, language, telemetry, or persona"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"

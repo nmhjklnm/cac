@@ -110,6 +110,129 @@ _proxy_reachable() {
     (echo >/dev/tcp/"$host"/"$port") 2>/dev/null
 }
 
+_locale_from_country_code() {
+    case "$1" in
+        US) echo "en_US.UTF-8" ;;
+        GB) echo "en_GB.UTF-8" ;;
+        AU) echo "en_AU.UTF-8" ;;
+        CA) echo "en_CA.UTF-8" ;;
+        SG) echo "en_SG.UTF-8" ;;
+        HK) echo "zh_HK.UTF-8" ;;
+        TW) echo "zh_TW.UTF-8" ;;
+        JP) echo "ja_JP.UTF-8" ;;
+        KR) echo "ko_KR.UTF-8" ;;
+        DE) echo "de_DE.UTF-8" ;;
+        FR) echo "fr_FR.UTF-8" ;;
+        ES) echo "es_ES.UTF-8" ;;
+        IT) echo "it_IT.UTF-8" ;;
+        PT|BR) echo "pt_BR.UTF-8" ;;
+        RU) echo "ru_RU.UTF-8" ;;
+        NL) echo "nl_NL.UTF-8" ;;
+        IN) echo "en_IN.UTF-8" ;;
+        *)  echo "en_US.UTF-8" ;;
+    esac
+}
+
+# Query timezone and locale from the current proxy exit IP.
+# Output: <timezone>\t<locale>\t<country_code>
+_geo_detect_tz_lang() {
+    local proxy_url="$1" ip_info detected_tz country_code
+    [[ -n "$proxy_url" ]] || return 1
+    ip_info=$(curl -s --proxy "$proxy_url" --connect-timeout 8 "http://ip-api.com/json/?fields=timezone,countryCode" 2>/dev/null || true)
+    [[ -n "$ip_info" ]] || return 1
+
+    read -r detected_tz country_code < <(
+        echo "$ip_info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timezone',''), d.get('countryCode',''))" 2>/dev/null || echo ""
+    )
+    [[ -n "$detected_tz" ]] || return 1
+
+    printf '%s\t%s\t%s\n' "$detected_tz" "$(_locale_from_country_code "$country_code")" "$country_code"
+}
+
+# Validate an IANA timezone name.
+_validate_timezone() {
+    local value="$1"
+    python3 - "$value" << 'PY'
+import sys
+from zoneinfo import ZoneInfo
+
+value = sys.argv[1].strip()
+if not value:
+    raise SystemExit(1)
+
+try:
+    ZoneInfo(value)
+except Exception:
+    raise SystemExit(1)
+
+print(value)
+PY
+}
+
+# Accept a POSIX locale (en_US.UTF-8) or a simple BCP 47 tag (en-US),
+# then normalize to a UTF-8 locale for LANG.
+_normalize_language() {
+    local value="$1"
+    python3 - "$value" << 'PY'
+import re
+import sys
+
+value = sys.argv[1].strip()
+if not value:
+    raise SystemExit(1)
+
+aliases = {
+    "C": "C.UTF-8",
+    "POSIX": "C.UTF-8",
+    "C.UTF-8": "C.UTF-8",
+    "C.UTF8": "C.UTF-8",
+}
+default_regions = {
+    "ar": "SA",
+    "cs": "CZ",
+    "de": "DE",
+    "en": "US",
+    "es": "ES",
+    "fr": "FR",
+    "hi": "IN",
+    "id": "ID",
+    "it": "IT",
+    "ja": "JP",
+    "ko": "KR",
+    "ms": "MY",
+    "nl": "NL",
+    "pl": "PL",
+    "pt": "BR",
+    "ru": "RU",
+    "th": "TH",
+    "tr": "TR",
+    "uk": "UA",
+    "vi": "VN",
+    "zh": "CN",
+}
+
+if value in aliases:
+    print(aliases[value])
+    raise SystemExit(0)
+
+normalized = value.replace("-", "_")
+match = re.fullmatch(r"([A-Za-z]{2,3})(?:_([A-Za-z]{2}|\d{3}))?(?:\.(?:UTF-?8|utf-?8))?", normalized)
+if not match:
+    raise SystemExit(1)
+
+language = match.group(1).lower()
+region = match.group(2)
+if region:
+    region = region.upper()
+else:
+    region = default_regions.get(language)
+    if not region:
+        raise SystemExit(1)
+
+print(f"{language}_{region}.UTF-8")
+PY
+}
+
 # Auto-detect proxy protocol (when user didn't specify http/socks5/https)
 # Usage: _auto_detect_proxy "host:port:user:pass" → returns a working full URL
 _auto_detect_proxy() {

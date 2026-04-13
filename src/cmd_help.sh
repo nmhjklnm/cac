@@ -8,6 +8,7 @@ cmd_help() {
     echo "  $(_bold "Environment")"
     echo "    $(_green "cac env create") <name> [-p proxy] [-c ver]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
+    echo "                                     proxy|version|timezone|language|telemetry|persona"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
     echo "    $(_green "cac env check")               Verify current environment"
