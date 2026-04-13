@@ -5,6 +5,17 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## Unreleased
+
+**New: `cac env set timezone|language` with validation and auto-detect**
+
+- Added `cac env set <name> timezone <IANA_TZ|auto>` and alias `tz`.
+- Added `cac env set <name> language <locale|tag|auto>` and alias `lang`.
+- Timezones are validated against Python `zoneinfo`, so invalid names are rejected early.
+- Languages accept either POSIX locales like `en_US.UTF-8` or simple BCP 47 tags like `en-US`, then normalize to UTF-8 locales for `LANG`.
+- `auto` re-detects timezone and language from the current proxy exit IP geolocation, making it easy to resync after changing proxies.
+- Help output, README, and command docs were updated to document the new behavior and examples.
+
 ## v1.5.4
 <sub>2026-04-02</sub>
 

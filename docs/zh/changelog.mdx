@@ -5,6 +5,17 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## Unreleased
+
+**新增：`cac env set timezone|language`，带校验和自动探测**
+
+- 新增 `cac env set <name> timezone <IANA_TZ|auto>`，别名 `tz`。
+- 新增 `cac env set <name> language <locale|tag|auto>`，别名 `lang`。
+- 时区使用 Python `zoneinfo` 做 IANA 名称校验，非法值会直接拒绝。
+- 语言既支持 `en_US.UTF-8` 这种 POSIX locale，也支持 `en-US` 这种常见标签，并统一规范化为 UTF-8 locale 写入 `LANG`。
+- `auto` 会根据当前代理出口 IP 的地理信息重新探测时区和语言，方便在换代理后重新同步。
+- 帮助输出、README 和命令文档已同步更新。
+
 ## v1.5.4
 <sub>2026-04-02</sub>
 
