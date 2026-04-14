@@ -91,9 +91,11 @@ _claude_version_is_newer() {
     [[ -z "$current" || "$current" == "system" ]] && return 0
     [[ "$candidate" == "$current" ]] && return 1
 
+    # Strip pre-release suffix before numeric comparison
+    local cand_base="${candidate%%-*}" curr_base="${current%%-*}"
     local highest
-    highest=$(printf '%s\n%s\n' "$current" "$candidate" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
-    [[ "$highest" == "$candidate" ]]
+    highest=$(printf '%s\n%s\n' "$curr_base" "$cand_base" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+    [[ "$highest" == "$cand_base" ]] && [[ "$cand_base" != "$curr_base" || "$candidate" > "$current" ]]
 }
 
 _claude_install_version_if_missing() {
@@ -154,17 +156,22 @@ _claude_env_auto_update_on_activate() {
     _claude_version_is_newer "$latest" "$current" || return 0
 
     local current_label="${current:-system}"
-    if _claude_prompt_yes_no "Claude Code $latest is available (current: $current_label). Update now?" "no"; then
+    local prompt_rc fallback_rc
+    _claude_prompt_yes_no "Claude Code $latest is available (current: $current_label). Update now?" "no"
+    prompt_rc=$?
+
+    if [[ "$prompt_rc" -eq 0 ]]; then
         if _claude_install_version_if_missing "$latest" && _claude_pin_env_version "$name" "$latest"; then
             echo "  $(_green "+") claude: updated $(_bold "$name") → $(_cyan "$latest")"
             return 0
         fi
 
-        if _claude_prompt_yes_no "Claude Code update failed. Continue activating $name with $current_label?" "yes"; then
+        _claude_prompt_yes_no "Claude Code update failed. Continue activating $name with $current_label?" "yes"
+        fallback_rc=$?
+        if [[ "$fallback_rc" -eq 0 ]]; then
             echo "  $(_yellow "⚠") continuing with Claude Code $current_label"
             return 0
         fi
-        local fallback_rc=$?
         if [[ "$fallback_rc" -eq 2 ]]; then
             echo "  $(_yellow "⚠") Claude Code update failed; non-interactive activation will continue with $current_label"
             return 0
@@ -173,7 +180,6 @@ _claude_env_auto_update_on_activate() {
         return 1
     fi
 
-    local prompt_rc=$?
     if [[ "$prompt_rc" -eq 2 ]]; then
         echo "  $(_yellow "⚠") Claude Code $latest is available; non-interactive activation will continue with $current_label"
         return 0
@@ -189,6 +195,7 @@ _claude_unused_versions() {
     for ver_dir in "$VERSIONS_DIR"/*/; do
         [[ -d "$ver_dir" ]] || continue
         ver=$(basename "$ver_dir")
+        [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || continue
         count=$(_envs_using_version "$ver")
         [[ "$count" -eq 0 ]] && echo "$ver"
     done

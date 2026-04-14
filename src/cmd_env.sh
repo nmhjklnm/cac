@@ -270,9 +270,9 @@ _env_cmd_activate() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    _timer_start
-
     _claude_env_auto_update_on_activate "$name" || return 1
+
+    _timer_start
 
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
