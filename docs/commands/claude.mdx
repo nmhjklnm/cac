@@ -49,6 +49,28 @@ cac claude pin 2.1.81
 
 This writes the version to `~/.cac/envs/<name>/version`. The wrapper resolves this file at launch time, so the change takes effect on the next `claude` invocation.
 
+## update
+
+Update an environment to the remote latest Claude Code release.
+
+```bash
+cac claude update        # update the active environment
+cac claude update work   # update a specific environment
+```
+
+If the latest version is not installed yet, cac downloads it first and then pins the environment to that version. This uses Anthropic's remote latest marker, not the local `.latest` file.
+
+## prune
+
+List installed Claude Code versions that are not referenced by any environment.
+
+```bash
+cac claude prune
+cac claude prune --yes
+```
+
+Without `--yes`, this only prints the unused versions. With `--yes`, cac removes those unused version directories and refreshes the local `.latest` marker.
+
 ## uninstall
 
 Remove an installed version. Fails if any environment is using it.

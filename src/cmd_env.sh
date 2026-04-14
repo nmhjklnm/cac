@@ -2,7 +2,7 @@
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona=""
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -21,6 +21,7 @@ _env_cmd_create() {
                          [[ "$telemetry_mode" =~ ^(stealth|paranoid|transparent)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use stealth, paranoid, or transparent)" ;;
             --persona)   [[ $# -ge 2 ]] || _die "$1 requires a value"; persona="$2"; shift 2
                          [[ "$persona" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$persona' (use macos-vscode, macos-cursor, macos-iterm, or linux-desktop)" ;;
+            --autoupdate|--auto-update) claude_auto_update=true; shift ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
@@ -28,7 +29,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -110,6 +111,7 @@ _env_cmd_create() {
     echo "$(_new_device_token)" > "$env_dir/device_token"
     date -u +"%Y-%m-%dT%H:%M:%S.000Z" > "$env_dir/first_start_time"
     [[ -n "$persona" ]] && echo "$persona" > "$env_dir/persona"
+    [[ "$claude_auto_update" == "true" ]] && echo "on" > "$env_dir/claude_auto_update"
 
     # Telemetry mode: stealth (default), paranoid, or transparent
     [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode stealth)
@@ -187,6 +189,7 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     echo
     [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
     [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    [[ "$claude_auto_update" == "true" ]] && echo "  $(_green "+") auto-update on"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
     echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
@@ -269,6 +272,8 @@ _env_cmd_activate() {
 
     _timer_start
 
+    _claude_env_auto_update_on_activate "$name" || return 1
+
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
 
@@ -303,7 +308,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona tz lang"
+    local known_keys="proxy version telemetry persona tz lang autoupdate auto-update"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -316,6 +321,7 @@ _env_cmd_set() {
         echo "                                                          Telemetry blocking: stealth (1p_events only), paranoid (max), transparent (none)"
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
+        echo "    $(_green "set") [name] autoupdate <on|off>             Auto-check Claude Code latest on activation"
         echo "    $(_green "set") [name] tz <IANA timezone>               Set timezone (e.g. Asia/Shanghai)"
         echo "    $(_green "set") [name] lang <locale>                    Set locale (e.g. zh_CN.UTF-8)"
         echo
@@ -335,7 +341,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|tz|lang> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|autoupdate|tz|lang> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -399,6 +405,27 @@ _env_cmd_set() {
                 echo "$(_green_bold "Set") persona for $(_bold "$name") → $(_cyan "$value")"
             fi
             ;;
+        autoupdate|auto-update)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/claude_auto_update"
+                echo "$(_green_bold "Disabled") Claude auto-update for $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] autoupdate <on|off>"
+                case "$value" in
+                    on|yes|true|1)
+                        echo "on" > "$env_dir/claude_auto_update"
+                        echo "$(_green_bold "Enabled") Claude auto-update for $(_bold "$name")"
+                        ;;
+                    off|no|false|0)
+                        rm -f "$env_dir/claude_auto_update"
+                        echo "$(_green_bold "Disabled") Claude auto-update for $(_bold "$name")"
+                        ;;
+                    *)
+                        _die "invalid autoupdate value '$value' (use on or off)"
+                        ;;
+                esac
+            fi
+            ;;
         tz)
             [[ "$remove" != "true" ]] || _die "cannot remove timezone"
             [[ -n "$value" ]] || _die "usage: cac env set [name] tz <IANA timezone>"
@@ -414,7 +441,7 @@ _env_cmd_set() {
             echo "$(_green_bold "Set") locale for $(_bold "$name") → $(_cyan "$value")"
             ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, persona, tz, or lang"
+            _die "unknown key '$key' — use proxy, version, telemetry, persona, autoupdate, tz, or lang"
             ;;
     esac
 }
@@ -440,10 +467,10 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, persona, tz, or lang"
+            echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"

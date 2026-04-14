@@ -214,13 +214,15 @@ try {
             proxy_meta=$(curl -s --proxy "$proxy" --connect-timeout 5 --max-time 8 \
                 "http://ip-api.com/json/?fields=query,timezone" 2>/dev/null || true)
             if [[ -n "$proxy_meta" ]]; then
-                read -r proxy_ip ip_tz < <(printf '%s' "$proxy_meta" | node -e "
+                local parsed_meta
+                parsed_meta=$(printf '%s' "$proxy_meta" | node -e "
 const fs = require('fs');
 try {
   const d = JSON.parse(fs.readFileSync(0, 'utf8'));
   process.stdout.write((d.query || '') + ' ' + (d.timezone || ''));
 } catch (_) {}
-" 2>/dev/null || true) || true
+" 2>/dev/null || true)
+                read -r proxy_ip ip_tz <<< "$parsed_meta" || true
             fi
 
             # Fast retry with dots: each attempt adds a dot

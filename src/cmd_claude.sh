@@ -77,6 +77,123 @@ _fetch_latest_version() {
     curl -fsSL "$_GCS_BUCKET/latest" 2>/dev/null
 }
 
+_claude_fetch_remote_latest() {
+    local ver
+    ver=$(_fetch_latest_version) || return 1
+    ver=$(printf '%s' "$ver" | tr -d '[:space:]')
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]] || return 1
+    echo "$ver"
+}
+
+_claude_version_is_newer() {
+    local candidate="$1" current="$2"
+    [[ -n "$candidate" ]] || return 1
+    [[ -z "$current" || "$current" == "system" ]] && return 0
+    [[ "$candidate" == "$current" ]] && return 1
+
+    local highest
+    highest=$(printf '%s\n%s\n' "$current" "$candidate" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+    [[ "$highest" == "$candidate" ]]
+}
+
+_claude_install_version_if_missing() {
+    local ver="$1"
+    mkdir -p "$VERSIONS_DIR"
+    if [[ -x "$(_version_binary "$ver")" ]]; then
+        _update_latest 2>/dev/null || true
+        return 0
+    fi
+
+    echo "Version $(_cyan "$ver") not installed, downloading ..." >&2
+    if ( _download_version "$ver" ); then
+        _update_latest 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
+_claude_pin_env_version() {
+    local name="$1" ver="$2"
+    printf '%s\n' "$ver" > "$ENVS_DIR/$name/version"
+}
+
+_claude_prompt_yes_no() {
+    local prompt="$1" default="${2:-no}" answer suffix
+    [[ -t 0 && -t 1 ]] || return 2
+
+    if [[ "$default" == "yes" ]]; then
+        suffix="[Y/n]"
+    else
+        suffix="[y/N]"
+    fi
+    printf "  %s %s " "$prompt" "$suffix"
+    read -r answer || answer=""
+    answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')
+
+    if [[ -z "$answer" ]]; then
+        [[ "$default" == "yes" ]]
+        return
+    fi
+    [[ "$answer" == "y" || "$answer" == "yes" ]]
+}
+
+_claude_env_auto_update_on_activate() {
+    local name="$1"
+    local env_dir="$ENVS_DIR/$name"
+    [[ "$(_read "$env_dir/claude_auto_update" "")" == "on" ]] || return 0
+
+    local latest
+    if ! latest=$(_claude_fetch_remote_latest); then
+        echo "  $(_yellow "⚠") Claude auto-update check failed; continuing with current version"
+        echo "  $(_dim "Run") $(_green "cac claude update $name") $(_dim "to retry manually.")"
+        return 0
+    fi
+
+    local current; current=$(_read "$env_dir/version" "")
+    [[ "$current" == "$latest" ]] && return 0
+    _claude_version_is_newer "$latest" "$current" || return 0
+
+    local current_label="${current:-system}"
+    if _claude_prompt_yes_no "Claude Code $latest is available (current: $current_label). Update now?" "no"; then
+        if _claude_install_version_if_missing "$latest" && _claude_pin_env_version "$name" "$latest"; then
+            echo "  $(_green "+") claude: updated $(_bold "$name") → $(_cyan "$latest")"
+            return 0
+        fi
+
+        if _claude_prompt_yes_no "Claude Code update failed. Continue activating $name with $current_label?" "yes"; then
+            echo "  $(_yellow "⚠") continuing with Claude Code $current_label"
+            return 0
+        fi
+        local fallback_rc=$?
+        if [[ "$fallback_rc" -eq 2 ]]; then
+            echo "  $(_yellow "⚠") Claude Code update failed; non-interactive activation will continue with $current_label"
+            return 0
+        fi
+        echo "  $(_red "✗") activation cancelled because Claude Code update failed" >&2
+        return 1
+    fi
+
+    local prompt_rc=$?
+    if [[ "$prompt_rc" -eq 2 ]]; then
+        echo "  $(_yellow "⚠") Claude Code $latest is available; non-interactive activation will continue with $current_label"
+        return 0
+    fi
+
+    echo "  $(_dim "Skipping Claude Code update for $name.")"
+    return 0
+}
+
+_claude_unused_versions() {
+    [[ -d "$VERSIONS_DIR" ]] || return 0
+    local ver_dir ver count
+    for ver_dir in "$VERSIONS_DIR"/*/; do
+        [[ -d "$ver_dir" ]] || continue
+        ver=$(basename "$ver_dir")
+        count=$(_envs_using_version "$ver")
+        [[ "$count" -eq 0 ]] && echo "$ver"
+    done
+}
+
 _claude_cmd_install() {
     local target="${1:-latest}"
     local ver
@@ -150,12 +267,95 @@ _claude_cmd_pin() {
     echo "$(_green_bold "Pinned") $(_bold "$current") -> Claude Code $(_cyan "$ver")"
 }
 
+_claude_cmd_update() {
+    _require_setup
+
+    [[ "${1:-}" != "-h" && "${1:-}" != "--help" && "${1:-}" != "help" ]] || {
+        echo "  $(_bold "update") [env]  Update an environment to the remote latest Claude Code"
+        return
+    }
+    [[ $# -le 1 ]] || _die "usage: cac claude update [env]"
+
+    local name="${1:-}"
+    if [[ -z "$name" ]]; then
+        name=$(_current_env)
+        [[ -n "$name" ]] || _die "no active environment — specify env name"
+    fi
+    _require_env "$name"
+
+    printf "Fetching latest version ... "
+    local latest
+    latest=$(_claude_fetch_remote_latest) || {
+        echo "$(_red "failed")"
+        _die "failed to fetch latest Claude Code version"
+    }
+    echo "$(_cyan "$latest")"
+
+    local env_dir="$ENVS_DIR/$name"
+    local current; current=$(_read "$env_dir/version" "")
+    if [[ "$current" == "$latest" ]]; then
+        echo "$(_green_bold "Up to date") $(_bold "$name") -> Claude Code $(_cyan "$latest")"
+        return
+    fi
+
+    if _claude_install_version_if_missing "$latest" && _claude_pin_env_version "$name" "$latest"; then
+        echo "$(_green_bold "Updated") $(_bold "$name") -> Claude Code $(_cyan "$latest")"
+        return
+    fi
+    _die "failed to update $(_bold "$name") to Claude Code $(_cyan "$latest")"
+}
+
+_claude_cmd_prune() {
+    _require_setup
+
+    local yes=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --yes|-y) yes=true; shift ;;
+            -h|--help|help)
+                echo "  $(_bold "prune") [--yes]  List or remove Claude Code versions not used by any env"
+                return
+                ;;
+            *) _die "unknown option: $1" ;;
+        esac
+    done
+
+    local unused=()
+    local ver
+    while IFS= read -r ver; do
+        [[ -n "$ver" ]] && unused+=("$ver")
+    done < <(_claude_unused_versions)
+
+    if [[ "${#unused[@]}" -eq 0 ]]; then
+        echo "$(_green_bold "Clean") no unused Claude Code versions"
+        return
+    fi
+
+    if [[ "$yes" != "true" ]]; then
+        echo "Unused Claude Code versions:"
+        for ver in "${unused[@]}"; do
+            echo "  $(_cyan "$ver")"
+        done
+        echo
+        echo "Run $(_green "cac claude prune --yes") to remove them."
+        return
+    fi
+
+    for ver in "${unused[@]}"; do
+        rm -rf "${VERSIONS_DIR:?}/$ver"
+        echo "$(_green "-") removed Claude Code $(_cyan "$ver")"
+    done
+    _update_latest 2>/dev/null || true
+}
+
 cmd_claude() {
     case "${1:-help}" in
         install)    _claude_cmd_install "${@:2}" ;;
         uninstall)  _claude_cmd_uninstall "${@:2}" ;;
         ls|list)    _claude_cmd_ls ;;
         pin)        _claude_cmd_pin "${@:2}" ;;
+        update)     _claude_cmd_update "${@:2}" ;;
+        prune)      _claude_cmd_prune "${@:2}" ;;
         help|-h|--help)
             echo "$(_bold "cac claude") — Claude Code version management"
             echo
@@ -163,6 +363,8 @@ cmd_claude() {
             echo "  $(_bold "uninstall") <ver>         Remove an installed version"
             echo "  $(_bold "ls")                      List installed versions"
             echo "  $(_bold "pin") <ver>               Pin current environment to a version"
+            echo "  $(_bold "update") [env]            Update an environment to remote latest"
+            echo "  $(_bold "prune") [--yes]           List or remove versions not used by envs"
             ;;
         *) _die "unknown: cac claude $1" ;;
     esac

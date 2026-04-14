@@ -1846,7 +1846,7 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
 
 _env_cmd_create() {
     _require_setup
-    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona=""
+    local name="" proxy="" claude_ver="" env_type="local" telemetry_mode="" clone_source="" clone_link=true persona="" claude_auto_update=false
     # Windows: force copy mode (NTFS symlinks require admin privileges)
     case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) clone_link=false ;; esac
 
@@ -1865,6 +1865,7 @@ _env_cmd_create() {
                          [[ "$telemetry_mode" =~ ^(stealth|paranoid|transparent)$ ]] || _die "invalid telemetry mode '$telemetry_mode' (use stealth, paranoid, or transparent)" ;;
             --persona)   [[ $# -ge 2 ]] || _die "$1 requires a value"; persona="$2"; shift 2
                          [[ "$persona" =~ ^(macos-vscode|macos-cursor|macos-iterm|linux-desktop)$ ]] || _die "invalid persona '$persona' (use macos-vscode, macos-cursor, macos-iterm, or linux-desktop)" ;;
+            --autoupdate|--auto-update) claude_auto_update=true; shift ;;
             --clone)     shift; if [[ -n "${1:-}" ]] && [[ "${1:-}" != -* ]]; then clone_source="$1"; shift; else clone_source="host"; fi ;;
             --no-link)   clone_link=false; shift ;;
             -*)          _die "unknown option: $1" ;;
@@ -1872,7 +1873,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>] [--autoupdate]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -1954,6 +1955,7 @@ _env_cmd_create() {
     echo "$(_new_device_token)" > "$env_dir/device_token"
     date -u +"%Y-%m-%dT%H:%M:%S.000Z" > "$env_dir/first_start_time"
     [[ -n "$persona" ]] && echo "$persona" > "$env_dir/persona"
+    [[ "$claude_auto_update" == "true" ]] && echo "on" > "$env_dir/claude_auto_update"
 
     # Telemetry mode: stealth (default), paranoid, or transparent
     [[ -z "$telemetry_mode" ]] && telemetry_mode=$(_cac_setting telemetry_mode stealth)
@@ -2031,6 +2033,7 @@ fs.writeFileSync(process.argv[3],JSON.stringify(merge(base,override),null,2));
     echo
     [[ -n "$proxy_url" ]] && echo "  $(_green "+") proxy    $proxy_url"
     [[ -n "$claude_ver" ]] && echo "  $(_green "+") claude   $(_cyan "$claude_ver")"
+    [[ "$claude_auto_update" == "true" ]] && echo "  $(_green "+") auto-update on"
     echo "  $(_green "+") env      $(_dim "${env_dir/#$HOME/~}/.claude/")"
     echo
     echo "  $(_dim "Environment activated. Run") $(_green "claude") $(_dim "to start.")"
@@ -2113,6 +2116,8 @@ _env_cmd_activate() {
 
     _timer_start
 
+    _claude_env_auto_update_on_activate "$name" || return 1
+
     echo "$name" > "$CAC_DIR/current"
     rm -f "$CAC_DIR/stopped"
 
@@ -2147,7 +2152,7 @@ _env_cmd_set() {
     # Parse: cac env set [name] <key> <value|--remove>
     # If first arg is a known key, use current env; otherwise treat as env name
     local name="" key="" value="" remove=false
-    local known_keys="proxy version telemetry persona tz lang"
+    local known_keys="proxy version telemetry persona tz lang autoupdate auto-update"
 
     if [[ $# -lt 1 ]] || [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "help" ]]; then
         echo
@@ -2160,6 +2165,7 @@ _env_cmd_set() {
         echo "                                                          Telemetry blocking: stealth (1p_events only), paranoid (max), transparent (none)"
         echo "    $(_green "set") [name] persona <macos-vscode|macos-cursor|macos-iterm|linux-desktop|--remove>"
         echo "                                                          Terminal preset: inject desktop env vars, hide Docker signals (for containers)"
+        echo "    $(_green "set") [name] autoupdate <on|off>             Auto-check Claude Code latest on activation"
         echo "    $(_green "set") [name] tz <IANA timezone>               Set timezone (e.g. Asia/Shanghai)"
         echo "    $(_green "set") [name] lang <locale>                    Set locale (e.g. zh_CN.UTF-8)"
         echo
@@ -2179,7 +2185,7 @@ _env_cmd_set() {
     _require_env "$name"
     local env_dir="$ENVS_DIR/$name"
 
-    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|tz|lang> <value|--remove>"
+    [[ $# -ge 1 ]] || _die "usage: cac env set [name] <proxy|version|telemetry|persona|autoupdate|tz|lang> <value|--remove>"
     key="$1"; shift
 
     # Parse value or --remove
@@ -2243,6 +2249,27 @@ _env_cmd_set() {
                 echo "$(_green_bold "Set") persona for $(_bold "$name") → $(_cyan "$value")"
             fi
             ;;
+        autoupdate|auto-update)
+            if [[ "$remove" == "true" ]]; then
+                rm -f "$env_dir/claude_auto_update"
+                echo "$(_green_bold "Disabled") Claude auto-update for $(_bold "$name")"
+            else
+                [[ -n "$value" ]] || _die "usage: cac env set [name] autoupdate <on|off>"
+                case "$value" in
+                    on|yes|true|1)
+                        echo "on" > "$env_dir/claude_auto_update"
+                        echo "$(_green_bold "Enabled") Claude auto-update for $(_bold "$name")"
+                        ;;
+                    off|no|false|0)
+                        rm -f "$env_dir/claude_auto_update"
+                        echo "$(_green_bold "Disabled") Claude auto-update for $(_bold "$name")"
+                        ;;
+                    *)
+                        _die "invalid autoupdate value '$value' (use on or off)"
+                        ;;
+                esac
+            fi
+            ;;
         tz)
             [[ "$remove" != "true" ]] || _die "cannot remove timezone"
             [[ -n "$value" ]] || _die "usage: cac env set [name] tz <IANA timezone>"
@@ -2258,7 +2285,7 @@ _env_cmd_set() {
             echo "$(_green_bold "Set") locale for $(_bold "$name") → $(_cyan "$value")"
             ;;
         *)
-            _die "unknown key '$key' — use proxy, version, telemetry, persona, tz, or lang"
+            _die "unknown key '$key' — use proxy, version, telemetry, persona, autoupdate, tz, or lang"
             ;;
     esac
 }
@@ -2284,10 +2311,10 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset] [--autoupdate]"
             echo "                             Create isolated environment (auto-activates)"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
-            echo "                             proxy, version, telemetry, persona, tz, or lang"
+            echo "                             proxy, version, telemetry, persona, autoupdate, tz, or lang"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
             echo "    $(_green "check")           Verify current environment"
@@ -2761,13 +2788,15 @@ try {
             proxy_meta=$(curl -s --proxy "$proxy" --connect-timeout 5 --max-time 8 \
                 "http://ip-api.com/json/?fields=query,timezone" 2>/dev/null || true)
             if [[ -n "$proxy_meta" ]]; then
-                read -r proxy_ip ip_tz < <(printf '%s' "$proxy_meta" | node -e "
+                local parsed_meta
+                parsed_meta=$(printf '%s' "$proxy_meta" | node -e "
 const fs = require('fs');
 try {
   const d = JSON.parse(fs.readFileSync(0, 'utf8'));
   process.stdout.write((d.query || '') + ' ' + (d.timezone || ''));
 } catch (_) {}
-" 2>/dev/null || true) || true
+" 2>/dev/null || true)
+                read -r proxy_ip ip_tz <<< "$parsed_meta" || true
             fi
 
             # Fast retry with dots: each attempt adds a dot
@@ -3018,6 +3047,123 @@ _fetch_latest_version() {
     curl -fsSL "$_GCS_BUCKET/latest" 2>/dev/null
 }
 
+_claude_fetch_remote_latest() {
+    local ver
+    ver=$(_fetch_latest_version) || return 1
+    ver=$(printf '%s' "$ver" | tr -d '[:space:]')
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]] || return 1
+    echo "$ver"
+}
+
+_claude_version_is_newer() {
+    local candidate="$1" current="$2"
+    [[ -n "$candidate" ]] || return 1
+    [[ -z "$current" || "$current" == "system" ]] && return 0
+    [[ "$candidate" == "$current" ]] && return 1
+
+    local highest
+    highest=$(printf '%s\n%s\n' "$current" "$candidate" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+    [[ "$highest" == "$candidate" ]]
+}
+
+_claude_install_version_if_missing() {
+    local ver="$1"
+    mkdir -p "$VERSIONS_DIR"
+    if [[ -x "$(_version_binary "$ver")" ]]; then
+        _update_latest 2>/dev/null || true
+        return 0
+    fi
+
+    echo "Version $(_cyan "$ver") not installed, downloading ..." >&2
+    if ( _download_version "$ver" ); then
+        _update_latest 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
+_claude_pin_env_version() {
+    local name="$1" ver="$2"
+    printf '%s\n' "$ver" > "$ENVS_DIR/$name/version"
+}
+
+_claude_prompt_yes_no() {
+    local prompt="$1" default="${2:-no}" answer suffix
+    [[ -t 0 && -t 1 ]] || return 2
+
+    if [[ "$default" == "yes" ]]; then
+        suffix="[Y/n]"
+    else
+        suffix="[y/N]"
+    fi
+    printf "  %s %s " "$prompt" "$suffix"
+    read -r answer || answer=""
+    answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')
+
+    if [[ -z "$answer" ]]; then
+        [[ "$default" == "yes" ]]
+        return
+    fi
+    [[ "$answer" == "y" || "$answer" == "yes" ]]
+}
+
+_claude_env_auto_update_on_activate() {
+    local name="$1"
+    local env_dir="$ENVS_DIR/$name"
+    [[ "$(_read "$env_dir/claude_auto_update" "")" == "on" ]] || return 0
+
+    local latest
+    if ! latest=$(_claude_fetch_remote_latest); then
+        echo "  $(_yellow "⚠") Claude auto-update check failed; continuing with current version"
+        echo "  $(_dim "Run") $(_green "cac claude update $name") $(_dim "to retry manually.")"
+        return 0
+    fi
+
+    local current; current=$(_read "$env_dir/version" "")
+    [[ "$current" == "$latest" ]] && return 0
+    _claude_version_is_newer "$latest" "$current" || return 0
+
+    local current_label="${current:-system}"
+    if _claude_prompt_yes_no "Claude Code $latest is available (current: $current_label). Update now?" "no"; then
+        if _claude_install_version_if_missing "$latest" && _claude_pin_env_version "$name" "$latest"; then
+            echo "  $(_green "+") claude: updated $(_bold "$name") → $(_cyan "$latest")"
+            return 0
+        fi
+
+        if _claude_prompt_yes_no "Claude Code update failed. Continue activating $name with $current_label?" "yes"; then
+            echo "  $(_yellow "⚠") continuing with Claude Code $current_label"
+            return 0
+        fi
+        local fallback_rc=$?
+        if [[ "$fallback_rc" -eq 2 ]]; then
+            echo "  $(_yellow "⚠") Claude Code update failed; non-interactive activation will continue with $current_label"
+            return 0
+        fi
+        echo "  $(_red "✗") activation cancelled because Claude Code update failed" >&2
+        return 1
+    fi
+
+    local prompt_rc=$?
+    if [[ "$prompt_rc" -eq 2 ]]; then
+        echo "  $(_yellow "⚠") Claude Code $latest is available; non-interactive activation will continue with $current_label"
+        return 0
+    fi
+
+    echo "  $(_dim "Skipping Claude Code update for $name.")"
+    return 0
+}
+
+_claude_unused_versions() {
+    [[ -d "$VERSIONS_DIR" ]] || return 0
+    local ver_dir ver count
+    for ver_dir in "$VERSIONS_DIR"/*/; do
+        [[ -d "$ver_dir" ]] || continue
+        ver=$(basename "$ver_dir")
+        count=$(_envs_using_version "$ver")
+        [[ "$count" -eq 0 ]] && echo "$ver"
+    done
+}
+
 _claude_cmd_install() {
     local target="${1:-latest}"
     local ver
@@ -3091,12 +3237,95 @@ _claude_cmd_pin() {
     echo "$(_green_bold "Pinned") $(_bold "$current") -> Claude Code $(_cyan "$ver")"
 }
 
+_claude_cmd_update() {
+    _require_setup
+
+    [[ "${1:-}" != "-h" && "${1:-}" != "--help" && "${1:-}" != "help" ]] || {
+        echo "  $(_bold "update") [env]  Update an environment to the remote latest Claude Code"
+        return
+    }
+    [[ $# -le 1 ]] || _die "usage: cac claude update [env]"
+
+    local name="${1:-}"
+    if [[ -z "$name" ]]; then
+        name=$(_current_env)
+        [[ -n "$name" ]] || _die "no active environment — specify env name"
+    fi
+    _require_env "$name"
+
+    printf "Fetching latest version ... "
+    local latest
+    latest=$(_claude_fetch_remote_latest) || {
+        echo "$(_red "failed")"
+        _die "failed to fetch latest Claude Code version"
+    }
+    echo "$(_cyan "$latest")"
+
+    local env_dir="$ENVS_DIR/$name"
+    local current; current=$(_read "$env_dir/version" "")
+    if [[ "$current" == "$latest" ]]; then
+        echo "$(_green_bold "Up to date") $(_bold "$name") -> Claude Code $(_cyan "$latest")"
+        return
+    fi
+
+    if _claude_install_version_if_missing "$latest" && _claude_pin_env_version "$name" "$latest"; then
+        echo "$(_green_bold "Updated") $(_bold "$name") -> Claude Code $(_cyan "$latest")"
+        return
+    fi
+    _die "failed to update $(_bold "$name") to Claude Code $(_cyan "$latest")"
+}
+
+_claude_cmd_prune() {
+    _require_setup
+
+    local yes=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --yes|-y) yes=true; shift ;;
+            -h|--help|help)
+                echo "  $(_bold "prune") [--yes]  List or remove Claude Code versions not used by any env"
+                return
+                ;;
+            *) _die "unknown option: $1" ;;
+        esac
+    done
+
+    local unused=()
+    local ver
+    while IFS= read -r ver; do
+        [[ -n "$ver" ]] && unused+=("$ver")
+    done < <(_claude_unused_versions)
+
+    if [[ "${#unused[@]}" -eq 0 ]]; then
+        echo "$(_green_bold "Clean") no unused Claude Code versions"
+        return
+    fi
+
+    if [[ "$yes" != "true" ]]; then
+        echo "Unused Claude Code versions:"
+        for ver in "${unused[@]}"; do
+            echo "  $(_cyan "$ver")"
+        done
+        echo
+        echo "Run $(_green "cac claude prune --yes") to remove them."
+        return
+    fi
+
+    for ver in "${unused[@]}"; do
+        rm -rf "${VERSIONS_DIR:?}/$ver"
+        echo "$(_green "-") removed Claude Code $(_cyan "$ver")"
+    done
+    _update_latest 2>/dev/null || true
+}
+
 cmd_claude() {
     case "${1:-help}" in
         install)    _claude_cmd_install "${@:2}" ;;
         uninstall)  _claude_cmd_uninstall "${@:2}" ;;
         ls|list)    _claude_cmd_ls ;;
         pin)        _claude_cmd_pin "${@:2}" ;;
+        update)     _claude_cmd_update "${@:2}" ;;
+        prune)      _claude_cmd_prune "${@:2}" ;;
         help|-h|--help)
             echo "$(_bold "cac claude") — Claude Code version management"
             echo
@@ -3104,6 +3333,8 @@ cmd_claude() {
             echo "  $(_bold "uninstall") <ver>         Remove an installed version"
             echo "  $(_bold "ls")                      List installed versions"
             echo "  $(_bold "pin") <ver>               Pin current environment to a version"
+            echo "  $(_bold "update") [env]            Update an environment to remote latest"
+            echo "  $(_bold "prune") [--yes]           List or remove versions not used by envs"
             ;;
         *) _die "unknown: cac claude $1" ;;
     esac
@@ -3763,7 +3994,7 @@ cmd_help() {
     echo
 
     echo "  $(_bold "Environment")"
-    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver]"
+    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--autoupdate]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
@@ -3775,6 +4006,8 @@ cmd_help() {
     echo "    $(_green "cac claude install") [latest|ver]   Install Claude Code"
     echo "    $(_green "cac claude ls")                     List installed versions"
     echo "    $(_green "cac claude pin") <ver>              Pin env to a version"
+    echo "    $(_green "cac claude update") [env]           Update env to remote latest"
+    echo "    $(_green "cac claude prune") [--yes]          List/remove unused versions"
     echo "    $(_green "cac claude uninstall") <ver>        Remove a version"
     echo
 

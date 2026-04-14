@@ -99,6 +99,9 @@ cac env create work-proxy -p 1.2.3.4:1080:u:p
 # 创建并绑定指定 Claude Code 版本
 cac env create legacy -c 2.1.81
 
+# 创建环境，并在每次激活时检查 Claude Code 更新
+cac env create work-auto --autoupdate
+
 # 从当前宿主配置复制 .claude 配置
 cac env create cloned --clone
 
@@ -124,6 +127,10 @@ cac env set proxy --remove
 # 切换当前环境使用的 Claude Code 版本
 cac env set version 2.1.81
 
+# 开启或关闭激活时的 Claude Code 更新检查
+cac env set work autoupdate on
+cac env set work autoupdate off
+
 # 删除环境
 cac env rm work
 ```
@@ -135,6 +142,9 @@ cac claude install latest
 cac claude install 2.1.81
 cac claude ls
 cac claude pin 2.1.81
+cac claude update work
+cac claude prune
+cac claude prune --yes
 cac claude uninstall 2.1.81
 ```
 
@@ -163,17 +173,20 @@ http://u:p@host:port
 
 | 命令 | 用途 |
 |:--|:--|
-| `cac env create <name> [-p proxy] [-c version] [--clone]` | 创建并激活环境 |
+| `cac env create <name> [-p proxy] [-c version] [--clone] [--autoupdate]` | 创建并激活环境 |
 | `cac <name>` | 切换到指定环境 |
 | `cac env ls` / `cac ls` | 查看环境列表 |
 | `cac env rm <name>` | 删除环境 |
 | `cac env set [name] proxy <proxy>` | 设置环境代理 |
 | `cac env set [name] proxy --remove` | 移除环境代理 |
 | `cac env set [name] version <version>` | 切换环境绑定的 Claude Code 版本 |
+| `cac env set [name] autoupdate <on\|off>` | 开启或关闭激活时的 Claude Code 更新检查 |
 | `cac env check [-d]` / `cac check` | 检查当前环境 |
 | `cac claude install [latest\|<version>]` | 安装 Claude Code 版本 |
 | `cac claude ls` | 查看已安装 Claude Code 版本 |
 | `cac claude pin <version>` | 当前环境绑定指定版本 |
+| `cac claude update [env]` | 将环境更新到远端最新 Claude Code |
+| `cac claude prune [--yes]` | 列出或删除未被环境引用的 Claude Code 版本 |
 | `cac claude uninstall <version>` | 卸载指定版本 |
 | `cac self delete` | 删除 cac 运行目录、wrapper 和环境数据 |
 | `cac -v` | 查看 cac 版本 |

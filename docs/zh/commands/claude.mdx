@@ -49,6 +49,28 @@ cac claude pin 2.1.81
 
 这会将版本写入 `~/.cac/envs/<name>/version`。包装器在启动时解析此文件，因此更改会在下次 `claude` 调用时生效。
 
+## update
+
+将环境更新到远端最新 Claude Code 版本。
+
+```bash
+cac claude update        # 更新当前活跃环境
+cac claude update work   # 更新指定环境
+```
+
+如果最新版本尚未安装，cac 会先下载，再把该环境锁定到这个版本。这里使用 Anthropic 远端 latest 标记，而不是本地 `.latest` 文件。
+
+## prune
+
+列出没有被任何环境引用的已安装 Claude Code 版本。
+
+```bash
+cac claude prune
+cac claude prune --yes
+```
+
+不带 `--yes` 时只列出未使用版本。带 `--yes` 时，cac 会删除这些未使用的版本目录，并刷新本地 `.latest` 标记。
+
 ## uninstall
 
 移除已安装的版本。如果有环境正在使用该版本，操作会失败。

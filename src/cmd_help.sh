@@ -6,7 +6,7 @@ cmd_help() {
     echo
 
     echo "  $(_bold "Environment")"
-    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver]"
+    echo "    $(_green "cac env create") <name> [-p proxy] [-c ver] [--autoupdate]"
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
@@ -18,6 +18,8 @@ cmd_help() {
     echo "    $(_green "cac claude install") [latest|ver]   Install Claude Code"
     echo "    $(_green "cac claude ls")                     List installed versions"
     echo "    $(_green "cac claude pin") <ver>              Pin env to a version"
+    echo "    $(_green "cac claude update") [env]           Update env to remote latest"
+    echo "    $(_green "cac claude prune") [--yes]          List/remove unused versions"
     echo "    $(_green "cac claude uninstall") <ver>        Remove a version"
     echo
 
