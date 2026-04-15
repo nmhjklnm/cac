@@ -263,10 +263,14 @@ _envs_using_version() {
 }
 
 # Elapsed time helper: call _timer_start, then _timer_elapsed
-_timer_start() { _TIMER_START=$(date +%s%N 2>/dev/null || date +%s); }
+_timer_start() {
+    _TIMER_START=$(date +%s%N 2>/dev/null || date +%s)
+    [[ "$_TIMER_START" =~ ^[0-9]+$ ]] || _TIMER_START=$(date +%s)
+}
 _timer_elapsed() {
     local now; now=$(date +%s%N 2>/dev/null || date +%s)
-    if [[ ${#now} -gt 10 ]]; then
+    [[ "$now" =~ ^[0-9]+$ ]] || now=$(date +%s)
+    if [[ ${#now} -gt 10 && ${#_TIMER_START} -gt 10 ]]; then
         # nanoseconds available
         local ms=$(( (now - _TIMER_START) / 1000000 ))
         if [[ $ms -ge 1000 ]]; then
@@ -1081,6 +1085,49 @@ CLAUDEMD_EOF
     fi
 }
 
+_write_session_transfer_skill() {
+    local config_dir="$1"
+    # Do not mutate a shared host skills directory when --clone symlinked it.
+    [[ -L "$config_dir/skills" ]] && return 0
+
+    local skill_dir="$config_dir/skills/cac-session-transfer"
+    mkdir -p "$skill_dir"
+    cat > "$skill_dir/SKILL.md" << 'SESSION_SKILL_EOF'
+---
+name: cac-session-transfer
+description: Use when the user wants to copy, move, list, or migrate Claude Code conversation/session context between cac environments.
+---
+
+# cac Session Transfer
+
+Use cac's built-in session commands to migrate Claude Code context between isolated cac environments.
+
+Session data is stored at:
+
+```bash
+~/.cac/envs/<env>/.claude/projects
+```
+
+Prefer these commands:
+
+```bash
+cac env sessions ls [env] [--project <name>]
+cac env sessions copy <from> <to> [--project <name>] [--session <id>] [--overwrite]
+cac env sessions move <from> <to> [--project <name>] [--session <id>] [--overwrite]
+```
+
+Guidelines:
+
+- Run `cac env sessions ls <env>` first when the user did not specify a project.
+- Run `cac env sessions ls <env> --project <name>` to show session IDs, update times, message counts, and first user messages for one project.
+- Use `--session <id>` together with `--project <name>` to copy or move exactly one session.
+- Use `copy` when the user says copy, clone, sync, reuse, or bring context over.
+- Use `move` only when the user explicitly says move, migrate, transfer, or remove from the source.
+- Do not pass `--overwrite` unless the user explicitly asks to replace destination session data.
+- Use `--project <name>` only with a project directory name from `cac env sessions ls <env>`.
+SESSION_SKILL_EOF
+}
+
 _write_wrapper() {
     mkdir -p "$CAC_DIR/bin"
     cat > "$CAC_DIR/bin/claude" << 'WRAPPER_EOF'
@@ -1854,6 +1901,8 @@ MERGE_EOF
         fi
     fi
 
+    _write_session_transfer_skill "$env_dir/.claude"
+
     _generate_client_cert "$name" >/dev/null 2>&1 || true
 
     # Auto-activate
@@ -2084,6 +2133,271 @@ _env_cmd_stop() {
     echo "  $(_dim "resume with:") $(_green "cac <name>")"
 }
 
+_env_sessions_help() {
+    echo
+    echo "  $(_bold "cac env sessions") — copy or move Claude Code session history"
+    echo
+    echo "    $(_green "ls") [env] [--project <name>]                   List projects or sessions"
+    echo "    $(_green "copy") <from> <to> [--project <name>] [--session <id>] [--overwrite]"
+    echo "                                                     Copy sessions between environments"
+    echo "    $(_green "move") <from> <to> [--project <name>] [--session <id>] [--overwrite]"
+    echo "                                                     Move sessions between environments"
+    echo
+    echo "  $(_dim "Session data lives in: ~/.cac/envs/<env>/.claude/projects")"
+    echo "  $(_dim "If --project is omitted, all projects are copied or moved.")"
+    echo "  $(_dim "Use --session with --project to copy or move one session ID.")"
+    echo
+}
+
+_env_sessions_project_count() {
+    local projects_dir="$1"
+    [[ -d "$projects_dir" ]] || { echo 0; return; }
+    find "$projects_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d '[:space:]'
+}
+
+_env_sessions_ls() {
+    _require_setup
+    local name="" project=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --project|-p) [[ $# -ge 2 ]] || _die "$1 requires a value"; project="$2"; shift 2 ;;
+            -*)           _die "unknown option: $1" ;;
+            *)
+                [[ -z "$name" ]] || _die "extra argument: $1"
+                name="$1"
+                shift
+                ;;
+        esac
+    done
+    if [[ -z "$name" ]]; then
+        name=$(_current_env)
+        [[ -n "$name" ]] || _die "no active environment — specify env name"
+    fi
+    _require_env "$name"
+
+    if [[ -n "$project" ]]; then
+        [[ "$project" != /* && "$project" != *".."* && "$project" != *"/"* ]] || \
+            _die "invalid project '$project' (use a single project directory name)"
+    fi
+
+    local projects_dir="$ENVS_DIR/$name/.claude/projects"
+    if [[ ! -d "$projects_dir" ]] || [[ "$(_env_sessions_project_count "$projects_dir")" -eq 0 ]]; then
+        echo "$(_dim "  No session projects in '$name'.")"
+        return
+    fi
+
+    if [[ -n "$project" ]]; then
+        local project_dir="$projects_dir/$project"
+        [[ -d "$project_dir" ]] || _die "project '$project' not found in '$name'"
+        python3 - "$project_dir" << 'PY_EOF'
+import glob
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+project_dir = sys.argv[1]
+files = sorted(glob.glob(os.path.join(project_dir, "*.jsonl")), key=os.path.getmtime, reverse=True)
+if not files:
+    print("  No sessions in this project.")
+    raise SystemExit(0)
+
+def text_from_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+            elif isinstance(item, str):
+                parts.append(item)
+        return " ".join(parts)
+    return ""
+
+def clean(s, limit=72):
+    s = " ".join((s or "").split())
+    return s if len(s) <= limit else s[: limit - 1] + "…"
+
+print("  %-36s  %-19s  %-8s  %-28s  %s" % ("SESSION", "UPDATED", "MESSAGES", "SESSION NAME", "FIRST USER MESSAGE"))
+for path in files:
+    sid = os.path.splitext(os.path.basename(path))[0]
+    updated = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    messages = 0
+    first_user = ""
+    custom_title = ""
+    ai_title = ""
+    agent_name = ""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            typ = obj.get("type")
+            if typ in ("user", "assistant"):
+                messages += 1
+            elif typ == "custom-title" and obj.get("sessionId") == sid:
+                custom_title = obj.get("customTitle") or ""
+            elif typ == "ai-title" and obj.get("sessionId") == sid:
+                ai_title = obj.get("aiTitle") or ""
+            elif typ == "agent-name" and obj.get("sessionId") == sid:
+                agent_name = obj.get("agentName") or ""
+            if not first_user and typ == "user" and not obj.get("isMeta"):
+                msg = obj.get("message") or {}
+                first_user = text_from_content(msg.get("content"))
+    session_name = custom_title or ai_title or agent_name
+    print("  %-36s  %-19s  %-8s  %-28s  %s" % (sid, updated, messages, clean(session_name, 28), clean(first_user)))
+PY_EOF
+        return 0
+    fi
+
+    printf "  $(_dim "%-48s  %s")\n" "PROJECT" "SESSIONS"
+    local project_dir project count
+    for project_dir in "$projects_dir"/*/; do
+        [[ -d "$project_dir" ]] || continue
+        project=$(basename "$project_dir")
+        count=$(find "$project_dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d '[:space:]')
+        printf "  $(_cyan "%-48s")  %s\n" "$project" "$count"
+    done
+    return 0
+}
+
+_env_sessions_transfer() {
+    _require_setup
+    local op="$1"; shift
+    local from="" to="" project="" session="" overwrite=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --project|-p) [[ $# -ge 2 ]] || _die "$1 requires a value"; project="$2"; shift 2 ;;
+            --session|-s) [[ $# -ge 2 ]] || _die "$1 requires a value"; session="$2"; shift 2 ;;
+            --overwrite)  overwrite=true; shift ;;
+            -*)           _die "unknown option: $1" ;;
+            *)
+                if [[ -z "$from" ]]; then
+                    from="$1"
+                elif [[ -z "$to" ]]; then
+                    to="$1"
+                else
+                    _die "extra argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -n "$from" && -n "$to" ]] || _die "usage: cac env sessions $op <from> <to> [--project <name>] [--session <id>] [--overwrite]"
+    [[ "$from" != "$to" ]] || _die "source and destination must be different environments"
+    _require_env "$from"
+    _require_env "$to"
+    [[ -z "$session" || -n "$project" ]] || _die "--session requires --project"
+
+    if [[ -n "$project" ]]; then
+        [[ "$project" != /* && "$project" != *".."* && "$project" != *"/"* ]] || \
+            _die "invalid project '$project' (use a single project directory name from 'cac env sessions ls <env>')"
+    fi
+    if [[ -n "$session" ]]; then
+        session="${session%.jsonl}"
+        [[ "$session" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || \
+            _die "invalid session '$session' (expected a UUID from 'cac env sessions ls <env> --project <name>')"
+    fi
+
+    local src_projects="$ENVS_DIR/$from/.claude/projects"
+    local dst_projects="$ENVS_DIR/$to/.claude/projects"
+    [[ -d "$src_projects" ]] || _die "environment '$from' has no session data"
+
+    local src_path dst_path src_file dst_file src_sidecar dst_sidecar label
+    if [[ -n "$session" ]]; then
+        src_path="$src_projects/$project"
+        dst_path="$dst_projects/$project"
+        src_file="$src_path/$session.jsonl"
+        dst_file="$dst_path/$session.jsonl"
+        src_sidecar="$src_path/$session"
+        dst_sidecar="$dst_path/$session"
+        label="$project/$session"
+        [[ -d "$src_path" ]] || _die "project '$project' not found in '$from'"
+        [[ -f "$src_file" ]] || _die "session '$session' not found in '$from' project '$project'"
+    elif [[ -n "$project" ]]; then
+        src_path="$src_projects/$project"
+        dst_path="$dst_projects/$project"
+        label="$project"
+        [[ -d "$src_path" ]] || _die "project '$project' not found in '$from'"
+    else
+        src_path="$src_projects"
+        dst_path="$dst_projects"
+        label="all projects"
+        [[ "$(_env_sessions_project_count "$src_projects")" -gt 0 ]] || _die "environment '$from' has no session projects"
+    fi
+
+    if [[ "$overwrite" != "true" ]]; then
+        if [[ -n "$session" ]] && { [[ -e "$dst_file" ]] || [[ -e "$dst_sidecar" ]]; }; then
+            _die "destination '$to' already has session '$session' in project '$project' — pass --overwrite to replace it"
+        fi
+        if [[ -z "$session" && -n "$project" && -e "$dst_path" ]]; then
+            _die "destination '$to' already has project '$project' — pass --overwrite to replace it"
+        fi
+        if [[ -z "$session" && -z "$project" && -d "$dst_path" && "$(_env_sessions_project_count "$dst_path")" -gt 0 ]]; then
+            _die "destination '$to' already has session data — pass --overwrite to replace it"
+        fi
+    fi
+
+    mkdir -p "$dst_projects"
+    if [[ "$overwrite" == "true" ]]; then
+        if [[ -n "$session" ]]; then
+            rm -rf "$dst_file" "$dst_sidecar"
+        elif [[ -n "$project" ]]; then
+            rm -rf "$dst_path"
+        else
+            rm -rf "$dst_projects"
+            mkdir -p "$dst_projects"
+        fi
+    fi
+
+    if [[ -n "$session" ]]; then
+        mkdir -p "$dst_path"
+        cp "$src_file" "$dst_file"
+        if [[ -d "$src_sidecar" ]]; then
+            cp -R "$src_sidecar" "$dst_sidecar"
+        fi
+    elif [[ -n "$project" ]]; then
+        cp -R "$src_path" "$dst_path"
+    else
+        cp -R "$src_path/." "$dst_path/"
+    fi
+
+    if [[ "$op" == "move" ]]; then
+        if [[ -n "$session" ]]; then
+            rm -rf "$src_file" "$src_sidecar"
+        elif [[ -n "$project" ]]; then
+            rm -rf "$src_path"
+        else
+            rm -rf "$src_projects"
+            mkdir -p "$src_projects"
+        fi
+    fi
+
+    local verb="Copied"
+    [[ "$op" == "move" ]] && verb="Moved"
+    echo "$(_green_bold "$verb") $(_cyan "$label") from $(_bold "$from") to $(_bold "$to")"
+}
+
+_env_cmd_sessions() {
+    case "${1:-help}" in
+        ls|list)          _env_sessions_ls "${@:2}" ;;
+        copy|cp)          _env_sessions_transfer copy "${@:2}" ;;
+        move|mv)          _env_sessions_transfer move "${@:2}" ;;
+        help|-h|--help)   _env_sessions_help ;;
+        *)                _die "unknown: cac env sessions $1" ;;
+    esac
+}
+
 cmd_env() {
     case "${1:-help}" in
         create)       _env_cmd_create "${@:2}" ;;
@@ -2091,6 +2405,7 @@ cmd_env() {
         ls|list)      _env_cmd_ls ;;
         rm|remove)    _env_cmd_rm "${@:2}" ;;
         activate)     _env_cmd_activate "${@:2}" ;;
+        session|sessions) _env_cmd_sessions "${@:2}" ;;
         stop)         _env_cmd_stop ;;
         check)        cmd_check "${@:2}" ;;
         deactivate)   echo "$(_yellow "warning:") deactivate has been removed — switch with 'cac <name>' or uninstall with 'cac self delete'" >&2 ;;
@@ -2104,6 +2419,7 @@ cmd_env() {
             echo "                             proxy, version, telemetry, or persona"
             echo "    $(_green "ls")              List all environments"
             echo "    $(_green "rm") <name>       Remove an environment"
+            echo "    $(_green "sessions")        Copy or move Claude Code session history"
             echo "    $(_green "check")           Verify current environment"
             echo "    $(_green "stop")            Pause cac (claude runs natively, no injection)"
             echo "    $(_green "cac") <name>      Switch environment (also resumes if stopped)"
@@ -3502,6 +3818,7 @@ cmd_help() {
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
+    echo "    $(_green "cac env sessions")            Copy or move session history"
     echo "    $(_green "cac env check")               Verify current environment"
     echo "    $(_green "cac") <name>                  Switch environment"
     echo

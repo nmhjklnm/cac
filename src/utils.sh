@@ -253,10 +253,14 @@ _envs_using_version() {
 }
 
 # Elapsed time helper: call _timer_start, then _timer_elapsed
-_timer_start() { _TIMER_START=$(date +%s%N 2>/dev/null || date +%s); }
+_timer_start() {
+    _TIMER_START=$(date +%s%N 2>/dev/null || date +%s)
+    [[ "$_TIMER_START" =~ ^[0-9]+$ ]] || _TIMER_START=$(date +%s)
+}
 _timer_elapsed() {
     local now; now=$(date +%s%N 2>/dev/null || date +%s)
-    if [[ ${#now} -gt 10 ]]; then
+    [[ "$now" =~ ^[0-9]+$ ]] || now=$(date +%s)
+    if [[ ${#now} -gt 10 && ${#_TIMER_START} -gt 10 ]]; then
         # nanoseconds available
         local ms=$(( (now - _TIMER_START) / 1000000 ))
         if [[ $ms -ge 1000 ]]; then

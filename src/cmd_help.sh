@@ -10,6 +10,7 @@ cmd_help() {
     echo "    $(_green "cac env set") [name] <key> <value>   Modify environment"
     echo "    $(_green "cac env ls")                  List all environments"
     echo "    $(_green "cac env rm") <name>           Remove an environment"
+    echo "    $(_green "cac env sessions")            Copy or move session history"
     echo "    $(_green "cac env check")               Verify current environment"
     echo "    $(_green "cac") <name>                  Switch environment"
     echo

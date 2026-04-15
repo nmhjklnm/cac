@@ -142,6 +142,49 @@ CLAUDEMD_EOF
     fi
 }
 
+_write_session_transfer_skill() {
+    local config_dir="$1"
+    # Do not mutate a shared host skills directory when --clone symlinked it.
+    [[ -L "$config_dir/skills" ]] && return 0
+
+    local skill_dir="$config_dir/skills/cac-session-transfer"
+    mkdir -p "$skill_dir"
+    cat > "$skill_dir/SKILL.md" << 'SESSION_SKILL_EOF'
+---
+name: cac-session-transfer
+description: Use when the user wants to copy, move, list, or migrate Claude Code conversation/session context between cac environments.
+---
+
+# cac Session Transfer
+
+Use cac's built-in session commands to migrate Claude Code context between isolated cac environments.
+
+Session data is stored at:
+
+```bash
+~/.cac/envs/<env>/.claude/projects
+```
+
+Prefer these commands:
+
+```bash
+cac env sessions ls [env] [--project <name>]
+cac env sessions copy <from> <to> [--project <name>] [--session <id>] [--overwrite]
+cac env sessions move <from> <to> [--project <name>] [--session <id>] [--overwrite]
+```
+
+Guidelines:
+
+- Run `cac env sessions ls <env>` first when the user did not specify a project.
+- Run `cac env sessions ls <env> --project <name>` to show session IDs, update times, message counts, and first user messages for one project.
+- Use `--session <id>` together with `--project <name>` to copy or move exactly one session.
+- Use `copy` when the user says copy, clone, sync, reuse, or bring context over.
+- Use `move` only when the user explicitly says move, migrate, transfer, or remove from the source.
+- Do not pass `--overwrite` unless the user explicitly asks to replace destination session data.
+- Use `--project <name>` only with a project directory name from `cac env sessions ls <env>`.
+SESSION_SKILL_EOF
+}
+
 _write_wrapper() {
     mkdir -p "$CAC_DIR/bin"
     cat > "$CAC_DIR/bin/claude" << 'WRAPPER_EOF'
