@@ -67,12 +67,21 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
         _generate_ca_cert 2>/dev/null || true
     fi
 
-    # Re-generate wrapper on version upgrade
+    # Re-generate wrapper on version upgrade — or when Windows entry point is missing.
+    # Pre-1.5.5 installs have ~/.cac/bin/claude (bash script) but no claude.cmd, so the
+    # wrapper is silently bypassed by cmd/PowerShell.
     if [[ -f "$CAC_DIR/bin/claude" ]]; then
-        local _wrapper_ver
+        local _wrapper_ver _need_rewrite=false
         _wrapper_ver=$(grep 'CAC_WRAPPER_VER=' "$CAC_DIR/bin/claude" 2>/dev/null | sed 's/.*CAC_WRAPPER_VER=//' | tr -d '[:space:]' || true)
-        if [[ "$_wrapper_ver" != "$CAC_VERSION" ]]; then
+        [[ "$_wrapper_ver" != "$CAC_VERSION" ]] && _need_rewrite=true
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                [[ -f "$CAC_DIR/bin/claude.cmd" ]] || _need_rewrite=true
+                ;;
+        esac
+        if [[ "$_need_rewrite" == "true" ]]; then
             _write_wrapper
+            _add_to_user_path "$CAC_DIR/bin"
         fi
         return 0
     fi

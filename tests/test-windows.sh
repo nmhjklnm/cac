@@ -62,10 +62,12 @@ else
     fail "python3 残留:"; echo "$py"
 fi
 
-# ── T04: /dev/tcp 仅在 utils.sh ──
+# ── T04: /dev/tcp 仅在 utils.sh / 内联 helper ──
+# templates.sh 的 wrapper 模板必须内联 _tcp_check（standalone 脚本无法 source utils.sh），
+# 内联实现里同样使用 /dev/tcp 快路径 + node 兜底，与 utils.sh 行为对齐。
 echo ""
-echo "[T04] /dev/tcp 仅在 utils.sh 内部"
-dt=$(grep -rn '/dev/tcp' "$PROJECT_DIR/src/"*.sh 2>/dev/null | grep -v 'src/utils.sh' || true)
+echo "[T04] /dev/tcp 仅在 utils.sh / templates.sh 内联 helper"
+dt=$(grep -rn '/dev/tcp' "$PROJECT_DIR/src/"*.sh 2>/dev/null | grep -vE 'src/(utils|templates)\.sh' || true)
 if [[ -z "$dt" ]]; then
     pass "无外部 /dev/tcp 引用"
 else
@@ -73,9 +75,10 @@ else
 fi
 
 # ── T05: pgrep 仅在正确位置 ──
+# 同样的原因，templates.sh 内联的 _count_claude_processes 在 Unix 分支使用 pgrep。
 echo ""
-echo "[T05] pgrep 仅在 Unix 分支 / utils.sh"
-pg=$(grep -rn 'pgrep' "$PROJECT_DIR/src/"*.sh 2>/dev/null | grep -v 'src/utils.sh' | grep -vi 'MINGW\|MSYS\|CYGWIN\|# ' || true)
+echo "[T05] pgrep 仅在 Unix 分支 / utils.sh / templates.sh"
+pg=$(grep -rn 'pgrep' "$PROJECT_DIR/src/"*.sh 2>/dev/null | grep -vE 'src/(utils|templates)\.sh' | grep -vi 'MINGW\|MSYS\|CYGWIN\|# ' || true)
 if [[ -z "$pg" ]]; then
     pass "pgrep 仅在正确位置"
 else

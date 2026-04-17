@@ -1,7 +1,7 @@
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.4"
+CAC_VERSION="1.5.5"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -386,7 +386,18 @@ _install_method() {
 
 _write_path_to_rc() {
     local rc_file="${1:-$(_detect_rc_file)}"
+    # Windows: Git Bash sources ~/.bashrc but it doesn't ship by default. Create it
+    # so the cac PATH stanza below has a home — otherwise the wrapper is silently
+    # bypassed by whatever else owns `claude` on PATH.
     if [[ -z "$rc_file" ]]; then
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                rc_file="$HOME/.bashrc"
+                touch "$rc_file" 2>/dev/null || true
+                ;;
+        esac
+    fi
+    if [[ -z "$rc_file" ]] || [[ ! -e "$rc_file" ]]; then
         echo "  $(_yellow '⚠') shell config file not found, please add PATH manually:"
         echo '    export PATH="$HOME/bin:$PATH"'
         echo '    export PATH="$HOME/.cac/bin:$PATH"'
@@ -482,28 +493,38 @@ fs.writeFileSync(fpath, JSON.stringify(d, null, 2) + '\n');
 }
 
 # ── Windows PATH helper ────────────────────────────────────
+# Prepend (not append) so the cac wrapper wins over any other Claude install
+# (e.g. ~/.local/bin/claude.exe). Idempotent: if already at the front, no-op;
+# if present elsewhere, move to the front.
 _add_to_user_path() {
     local dir="$1"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
             local win_path
             win_path="$(cygpath -w "$dir" 2>/dev/null || echo "$dir")"
-            # Check if already in User PATH via powershell
-            local in_path
-            in_path="$(powershell.exe -NoProfile -Command "
+            local position
+            position="$(powershell.exe -NoProfile -Command "
+                \$target = '$win_path'
                 \$current = [Environment]::GetEnvironmentVariable('Path','User')
-                if (\$current -split ';' -contains '$win_path') { 'yes' } else { 'no' }
-            " 2>/dev/null | tr -d '\r')"
-            if [[ "$in_path" == "yes" ]]; then
-                _log "PATH already includes $dir"
+                if (-not \$current) { 'missing'; exit }
+                \$parts = @(\$current -split ';' | Where-Object { \$_ })
+                if (\$parts.Count -gt 0 -and \$parts[0].TrimEnd('\\') -ieq \$target.TrimEnd('\\')) { 'first' }
+                elseif (\$parts | Where-Object { \$_.TrimEnd('\\') -ieq \$target.TrimEnd('\\') }) { 'present' }
+                else { 'missing' }
+            " 2>/dev/null | tr -d '\r' | tail -n 1)"
+            if [[ "$position" == "first" ]]; then
+                _log "PATH already begins with $dir"
                 return 0
             fi
             powershell.exe -NoProfile -Command "
+                \$target = '$win_path'
                 \$current = [Environment]::GetEnvironmentVariable('Path','User')
-                [Environment]::SetEnvironmentVariable('Path', \"\$current;$win_path\", 'User')
+                \$parts = @(\$current -split ';' | Where-Object { \$_ -and \$_.TrimEnd('\\') -ine \$target.TrimEnd('\\') })
+                \$new = (@(\$target) + \$parts) -join ';'
+                [Environment]::SetEnvironmentVariable('Path', \$new, 'User')
             " 2>/dev/null
             if [[ $? -eq 0 ]]; then
-                _log "Added $dir to User PATH (restart terminal to take effect)"
+                _log "Prepended $dir to User PATH (restart terminal to take effect)"
             else
                 _warn "Failed to add $dir to User PATH"
             fi

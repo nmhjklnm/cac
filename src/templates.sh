@@ -152,6 +152,47 @@ set -euo pipefail
 CAC_DIR="$HOME/.cac"
 ENVS_DIR="$CAC_DIR/envs"
 
+# ── inlined helpers (kept in sync with src/utils.sh) ──
+# Wrapper is a standalone script — cannot source utils.sh — so the cross-platform
+# helpers it depends on must live here too.
+_native_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) cygpath -w "$path" 2>/dev/null || printf '%s' "$path" ;;
+        *) printf '%s' "$path" ;;
+    esac
+}
+
+_tcp_check() {
+    local host="$1" port="$2" timeout_sec="${3:-2}"
+    if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
+        return 0
+    fi
+    node -e "
+const net = require('net');
+const host = process.argv[1];
+const port = Number(process.argv[2]);
+const timeoutMs = Number(process.argv[3]) * 1000;
+const s = net.createConnection({ host, port, timeout: timeoutMs });
+s.on('connect', () => { s.destroy(); process.exit(0); });
+s.on('timeout', () => { s.destroy(); process.exit(1); });
+s.on('error', () => process.exit(1));
+" "$host" "$port" "$timeout_sec" >/dev/null 2>&1
+}
+
+_count_claude_processes() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            tasklist.exe //FO CSV //NH 2>/dev/null \
+                | tr -d '\r' \
+                | awk -F',' 'tolower($1) ~ /^"claude(\.exe)?"$/ { c++ } END { print c+0 }'
+            ;;
+        *)
+            pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0
+            ;;
+    esac
+}
+
 # cacstop state: passthrough directly
 if [[ -f "$CAC_DIR/stopped" ]]; then
     _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude" 2>/dev/null || true)
