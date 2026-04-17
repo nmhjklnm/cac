@@ -163,6 +163,27 @@ _native_path() {
     esac
 }
 
+_version_binary() {
+    local binary="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary="claude.exe" ;;
+    esac
+    echo "$CAC_DIR/versions/$1/$binary"
+}
+
+# Path form for NODE_OPTIONS / BUN_OPTIONS only.
+# Node's options parser treats '\' as an escape character, which silently
+# strips backslashes in Windows paths ("C:\Users\..." → "C:Users..."). Use
+# mixed-mode (forward-slash) paths — Node accepts them on Windows and they
+# survive the escape pass untouched.
+_node_require_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) cygpath -m "$path" 2>/dev/null || printf '%s' "$path" ;;
+        *) printf '%s' "$path" ;;
+    esac
+}
+
 _tcp_check() {
     local host="$1" port="$2" timeout_sec="${3:-2}"
     if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
@@ -422,7 +443,7 @@ fi
 # Use -r (readable) not -f (exists) — root-owned files with mode 600 exist but
 # can't be read by normal user, causing bun/node to crash silently.
 if [[ -r "$CAC_DIR/cac-dns-guard.js" ]]; then
-    _dns_guard_path=$(_native_path "$CAC_DIR/cac-dns-guard.js")
+    _dns_guard_path=$(_node_require_path "$CAC_DIR/cac-dns-guard.js")
     case "${NODE_OPTIONS:-}" in
         *cac-dns-guard.js*) ;; # already injected, skip
         *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $_dns_guard_path" ;;
@@ -463,7 +484,7 @@ fi
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
 export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
 if [[ -r "$CAC_DIR/fingerprint-hook.js" ]]; then
-    _fingerprint_hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
+    _fingerprint_hook_path=$(_node_require_path "$CAC_DIR/fingerprint-hook.js")
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
         *) export NODE_OPTIONS="--require $_fingerprint_hook_path ${NODE_OPTIONS:-}" ;;
