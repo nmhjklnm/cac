@@ -11,7 +11,7 @@ VERSIONS_DIR="$CAC_DIR/versions"
 # ── utils: colors, read/write, UUID, proxy parsing ───────────────────────
 
 # shellcheck disable=SC2034  # used in build-concatenated cac script
-CAC_VERSION="1.5.4"
+CAC_VERSION="1.5.7"
 
 _read()   { [[ -f "$1" ]] && tr -d '[:space:]' < "$1" || echo "${2:-}"; }
 _die()    { printf '%b\n' "$(_red "error:") $*" >&2; exit 1; }
@@ -396,7 +396,18 @@ _install_method() {
 
 _write_path_to_rc() {
     local rc_file="${1:-$(_detect_rc_file)}"
+    # Windows: Git Bash sources ~/.bashrc but it doesn't ship by default. Create it
+    # so the cac PATH stanza below has a home — otherwise the wrapper is silently
+    # bypassed by whatever else owns `claude` on PATH.
     if [[ -z "$rc_file" ]]; then
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                rc_file="$HOME/.bashrc"
+                touch "$rc_file" 2>/dev/null || true
+                ;;
+        esac
+    fi
+    if [[ -z "$rc_file" ]] || [[ ! -e "$rc_file" ]]; then
         echo "  $(_yellow '⚠') shell config file not found, please add PATH manually:"
         echo '    export PATH="$HOME/bin:$PATH"'
         echo '    export PATH="$HOME/.cac/bin:$PATH"'
@@ -492,28 +503,38 @@ fs.writeFileSync(fpath, JSON.stringify(d, null, 2) + '\n');
 }
 
 # ── Windows PATH helper ────────────────────────────────────
+# Prepend (not append) so the cac wrapper wins over any other Claude install
+# (e.g. ~/.local/bin/claude.exe). Idempotent: if already at the front, no-op;
+# if present elsewhere, move to the front.
 _add_to_user_path() {
     local dir="$1"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
             local win_path
             win_path="$(cygpath -w "$dir" 2>/dev/null || echo "$dir")"
-            # Check if already in User PATH via powershell
-            local in_path
-            in_path="$(powershell.exe -NoProfile -Command "
+            local position
+            position="$(powershell.exe -NoProfile -Command "
+                \$target = '$win_path'
                 \$current = [Environment]::GetEnvironmentVariable('Path','User')
-                if (\$current -split ';' -contains '$win_path') { 'yes' } else { 'no' }
-            " 2>/dev/null | tr -d '\r')"
-            if [[ "$in_path" == "yes" ]]; then
-                _log "PATH already includes $dir"
+                if (-not \$current) { 'missing'; exit }
+                \$parts = @(\$current -split ';' | Where-Object { \$_ })
+                if (\$parts.Count -gt 0 -and \$parts[0].TrimEnd('\\') -ieq \$target.TrimEnd('\\')) { 'first' }
+                elseif (\$parts | Where-Object { \$_.TrimEnd('\\') -ieq \$target.TrimEnd('\\') }) { 'present' }
+                else { 'missing' }
+            " 2>/dev/null | tr -d '\r' | tail -n 1)"
+            if [[ "$position" == "first" ]]; then
+                _log "PATH already begins with $dir"
                 return 0
             fi
             powershell.exe -NoProfile -Command "
+                \$target = '$win_path'
                 \$current = [Environment]::GetEnvironmentVariable('Path','User')
-                [Environment]::SetEnvironmentVariable('Path', \"\$current;$win_path\", 'User')
+                \$parts = @(\$current -split ';' | Where-Object { \$_ -and \$_.TrimEnd('\\') -ine \$target.TrimEnd('\\') })
+                \$new = (@(\$target) + \$parts) -join ';'
+                [Environment]::SetEnvironmentVariable('Path', \$new, 'User')
             " 2>/dev/null
             if [[ $? -eq 0 ]]; then
-                _log "Added $dir to User PATH (restart terminal to take effect)"
+                _log "Prepended $dir to User PATH (restart terminal to take effect)"
             else
                 _warn "Failed to add $dir to User PATH"
             fi
@@ -1218,6 +1239,114 @@ set -euo pipefail
 CAC_DIR="$HOME/.cac"
 ENVS_DIR="$CAC_DIR/envs"
 
+# ── inlined helpers (kept in sync with src/utils.sh) ──
+# Wrapper is a standalone script — cannot source utils.sh — so the cross-platform
+# helpers it depends on must live here too.
+_native_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) cygpath -w "$path" 2>/dev/null || printf '%s' "$path" ;;
+        *) printf '%s' "$path" ;;
+    esac
+}
+
+_version_binary() {
+    local binary="claude"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) binary="claude.exe" ;;
+    esac
+    echo "$CAC_DIR/versions/$1/$binary"
+}
+
+# Path form for NODE_OPTIONS / BUN_OPTIONS only.
+# Node's options parser treats '\' as an escape character, which silently
+# strips backslashes in Windows paths ("C:\Users\..." → "C:Users..."). Use
+# mixed-mode (forward-slash) paths — Node accepts them on Windows and they
+# survive the escape pass untouched.
+_node_require_path() {
+    local path="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) cygpath -m "$path" 2>/dev/null || printf '%s' "$path" ;;
+        *) printf '%s' "$path" ;;
+    esac
+}
+
+_tcp_check() {
+    local host="$1" port="$2" timeout_sec="${3:-2}"
+    if (echo >"/dev/tcp/$host/$port") 2>/dev/null; then
+        return 0
+    fi
+    node -e "
+const net = require('net');
+const host = process.argv[1];
+const port = Number(process.argv[2]);
+const timeoutMs = Number(process.argv[3]) * 1000;
+const s = net.createConnection({ host, port, timeout: timeoutMs });
+s.on('connect', () => { s.destroy(); process.exit(0); });
+s.on('timeout', () => { s.destroy(); process.exit(1); });
+s.on('error', () => process.exit(1));
+" "$host" "$port" "$timeout_sec" >/dev/null 2>&1
+}
+
+_count_claude_processes() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            tasklist.exe //FO CSV //NH 2>/dev/null \
+                | tr -d '\r' \
+                | awk -F',' 'tolower($1) ~ /^"claude(\.exe)?"$/ { c++ } END { print c+0 }'
+            ;;
+        *)
+            pgrep -x "claude" 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0
+            ;;
+    esac
+}
+
+_ensure_claude_git_bash_path() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) return 0 ;;
+    esac
+
+    if [[ -n "${CLAUDE_CODE_GIT_BASH_PATH:-}" ]]; then
+        local existing
+        existing="$(cygpath -u "$CLAUDE_CODE_GIT_BASH_PATH" 2>/dev/null || printf '%s\n' "$CLAUDE_CODE_GIT_BASH_PATH")"
+        [[ -f "$existing" ]] && return 0
+    fi
+
+    local candidate
+    for candidate in \
+        "${ProgramFiles:-}/Git/bin/bash.exe" \
+        "${ProgramW6432:-}/Git/bin/bash.exe" \
+        "${LocalAppData:-}/Programs/Git/bin/bash.exe" \
+        "${LocalAppData:-}/Git/bin/bash.exe"
+    do
+        [[ -n "$candidate" && -f "$candidate" ]] || continue
+        export CLAUDE_CODE_GIT_BASH_PATH="$(_native_path "$candidate")"
+        return 0
+    done
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        candidate="$(cygpath -u "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        candidate="$(dirname "$candidate")/../bin/bash.exe"
+        candidate="$(cd "$(dirname "$candidate")" 2>/dev/null && pwd)/$(basename "$candidate")"
+        [[ -f "$candidate" ]] || continue
+        export CLAUDE_CODE_GIT_BASH_PATH="$(_native_path "$candidate")"
+        return 0
+    done < <(cmd.exe /c "where git.exe" 2>/dev/null | tr -d '\r')
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        [[ "$candidate" == *"\\WindowsApps\\"* ]] && continue
+        candidate="$(cygpath -u "$candidate" 2>/dev/null || printf '%s\n' "$candidate")"
+        [[ -f "$candidate" ]] || continue
+        export CLAUDE_CODE_GIT_BASH_PATH="$(_native_path "$candidate")"
+        return 0
+    done < <(cmd.exe /c "where bash.exe" 2>/dev/null | tr -d '\r')
+}
+
+_ensure_claude_git_bash_path
+
 # cacstop state: passthrough directly
 if [[ -f "$CAC_DIR/stopped" ]]; then
     _real=$(tr -d '[:space:]' < "$CAC_DIR/real_claude" 2>/dev/null || true)
@@ -1401,7 +1530,7 @@ fi
 # Use -r (readable) not -f (exists) — root-owned files with mode 600 exist but
 # can't be read by normal user, causing bun/node to crash silently.
 if [[ -r "$CAC_DIR/cac-dns-guard.js" ]]; then
-    _dns_guard_path=$(_native_path "$CAC_DIR/cac-dns-guard.js")
+    _dns_guard_path=$(_node_require_path "$CAC_DIR/cac-dns-guard.js")
     case "${NODE_OPTIONS:-}" in
         *cac-dns-guard.js*) ;; # already injected, skip
         *) export NODE_OPTIONS="${NODE_OPTIONS:-} --require $_dns_guard_path" ;;
@@ -1442,7 +1571,7 @@ fi
 export CAC_USERNAME="user-$(echo "$_name" | cut -c1-8)"
 export USER="$CAC_USERNAME" LOGNAME="$CAC_USERNAME"
 if [[ -r "$CAC_DIR/fingerprint-hook.js" ]]; then
-    _fingerprint_hook_path=$(_native_path "$CAC_DIR/fingerprint-hook.js")
+    _fingerprint_hook_path=$(_node_require_path "$CAC_DIR/fingerprint-hook.js")
     case "${NODE_OPTIONS:-}" in
         *fingerprint-hook.js*) ;;
         *) export NODE_OPTIONS="--require $_fingerprint_hook_path ${NODE_OPTIONS:-}" ;;
@@ -1621,6 +1750,8 @@ if not defined BASH_EXE (
   >&2 echo [cac] Error: Git Bash not found. Install Git for Windows or add bash.exe to PATH.
   exit /b 9009
 )
+if defined CLAUDE_CODE_GIT_BASH_PATH if not exist "%CLAUDE_CODE_GIT_BASH_PATH%" set "CLAUDE_CODE_GIT_BASH_PATH="
+if not defined CLAUDE_CODE_GIT_BASH_PATH set "CLAUDE_CODE_GIT_BASH_PATH=%BASH_EXE%"
 "%BASH_EXE%" "%SCRIPT_DIR%\claude" %*
 exit /b %ERRORLEVEL%
 CMDEOF
@@ -1801,12 +1932,21 @@ fs.writeFileSync(fpath,JSON.stringify(d,null,2)+'\n');
         _generate_ca_cert 2>/dev/null || true
     fi
 
-    # Re-generate wrapper on version upgrade
+    # Re-generate wrapper on version upgrade — or when Windows entry point is missing.
+    # Pre-1.5.5 installs have ~/.cac/bin/claude (bash script) but no claude.cmd, so the
+    # wrapper is silently bypassed by cmd/PowerShell.
     if [[ -f "$CAC_DIR/bin/claude" ]]; then
-        local _wrapper_ver
+        local _wrapper_ver _need_rewrite=false
         _wrapper_ver=$(grep 'CAC_WRAPPER_VER=' "$CAC_DIR/bin/claude" 2>/dev/null | sed 's/.*CAC_WRAPPER_VER=//' | tr -d '[:space:]' || true)
-        if [[ "$_wrapper_ver" != "$CAC_VERSION" ]]; then
+        [[ "$_wrapper_ver" != "$CAC_VERSION" ]] && _need_rewrite=true
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                [[ -f "$CAC_DIR/bin/claude.cmd" ]] || _need_rewrite=true
+                ;;
+        esac
+        if [[ "$_need_rewrite" == "true" ]]; then
             _write_wrapper
+            _add_to_user_path "$CAC_DIR/bin"
         fi
         return 0
     fi

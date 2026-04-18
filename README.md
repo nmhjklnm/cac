@@ -2,15 +2,19 @@
 
 这是面向 **Windows 本地使用** 的 cac 适配仓库。
 
-**Claude Code 小雨衣 · Windows 版** — Windows 适配 fork
+> 重点：本仓库 **没有发布到 npm**。不要用 `npm install -g claude-cac` 安装本仓库；那个命令安装的是上游 `nmhjklnm/cac`。使用本仓库时必须先 clone 到本地，再运行本地安装脚本。
 
-**[中文](#中文) | [English](#english)**
+## 项目定位
 
-[![GitHub stars](https://img.shields.io/github/stars/nmhjklnm/cac?style=social)](https://github.com/nmhjklnm/cac)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
+`cac-win` 保留上游 cac 的 Claude Code 环境管理能力，但 README 只保留 Windows 使用路径：
 
-> 本仓库是 [nmhjklnm/cac](https://github.com/nmhjklnm/cac) 的 Windows 适配 fork，专注于 Windows 平台兼容性。**未发布到 npm**，请通过 clone 仓库的方式安装。macOS / Linux 用户请直接使用 [上游仓库](https://github.com/nmhjklnm/cac)。
+- Windows 10/11 下通过 CMD、PowerShell 或 Git Bash 使用
+- `cac.cmd` / `cac.ps1` 自动查找 Git Bash，并委托给 Bash 主实现
+- 通过 `scripts/install-local-win.ps1` 注册本地 checkout 的 `cac` 命令
+- 初始化后生成 `%USERPROFILE%\.cac\bin\claude.cmd`
+- Windows 下环境 clone 默认使用复制模式，避免 NTFS 符号链接权限问题
+
+完整的上游式跨平台 README 已归档到 [docs/original-readme.md](docs/original-readme.md)。其中的 npm 安装/更新说明只适用于上游包，不代表本仓库已发布到 npm。
 
 ## 前置要求
 
@@ -19,59 +23,35 @@
 - Node.js 18+，并确保 npm 在 PATH 中
 - PowerShell 5.1+
 
-<a id="中文"></a>
-
-## 中文
-
-> **[Switch to English](#english)**
-
-### 关于本仓库
-
-**cac-win** 是 [nmhjklnm/cac](https://github.com/nmhjklnm/cac) 的 Windows 适配版本，在上游基础上额外解决了：
-
-- Windows 本地化系统（中文/日文等）下 IPv6 泄漏检测误报
-- npm 全局目录在 nvm-windows / fnm / volta / Scoop 等非标准安装下路径错误
-- Git Bash 下 OpenSSL 路径查找顺序问题
-- Windows 专用入口（`cac.cmd` / `cac.ps1`）及 Git Bash 自动定位
-
-cac 本身的功能与上游一致：版本管理、环境隔离、设备指纹伪装、遥测阻断、代理路由。
-
-### 注意事项
-
-> **封号风险**：cac 提供设备指纹层保护（UUID、主机名、MAC、遥测阻断、配置隔离），但**无法影响账号层风险**——包括 OAuth 账号本身、支付方式指纹、IP 信誉评分及 Anthropic 服务端决策。
-
-> **代理工具冲突**：使用前建议关闭 Clash、sing-box 等本地代理/VPN 工具。即使发生冲突，cac 也会 fail-closed，**不会泄露真实 IP**。
-
-- **首次登录**：启动 `claude` 后输入 `/login` 完成 OAuth 授权
-- **安全验证**：随时运行 `cac env check` 确认隐私保护状态
-- **IPv6**：建议系统级关闭，防止真实地址泄露
-
-### 安装（Windows）
-
-**前置要求**：
-- Windows 10 / 11
-- [Git for Windows](https://git-scm.com/download/win)（必须包含 Git Bash）
-- Node.js 18+
+## 本地安装
 
 ```powershell
-# 1. 克隆本仓库
 git clone https://github.com/Cainiaooo/cac-win.git
 cd cac-win
 
-# 2. 运行安装脚本（在 PowerShell 中执行）
+# 安装当前 checkout 的本地依赖
+npm install
+
+# 把当前 checkout 注册为全局 cac 命令
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
 ```
 
-安装脚本会在 npm 全局目录中生成 `cac` / `cac.cmd` / `cac.ps1` shim，并自动将该目录加入用户 PATH。支持 nvm-windows / fnm / volta / Scoop 等非标准 Node.js 安装。
-
-> **找不到 `cac` 命令？** 重新打开终端窗口。如仍找不到，运行 `npm prefix -g` 确认输出目录在 PATH 中，然后手动添加。
-
-### 首次使用
+安装完成后，重新打开 CMD、PowerShell 或 Git Bash，再验证：
 
 ```powershell
 cac -v
 cac help
 ```
+
+如果提示找不到 `cac`，检查 npm 全局 bin 目录是否在用户 PATH 中：
+
+```powershell
+npm prefix -g
+```
+
+常见路径是 `%APPDATA%\npm`。安装脚本会自动尝试写入用户 PATH，并适配 nvm-windows / fnm / volta 等 Node.js 管理器；如果当前终端没有刷新，重开终端后再试。
+
+## 首次使用
 
 ```powershell
 # 安装 cac 托管的 Claude Code 二进制
@@ -87,8 +67,6 @@ cac env check
 claude
 ```
 
-首次初始化后会自动生成 `%USERPROFILE%\.cac\bin\claude.cmd`。如果新终端里找不到 `claude`，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH 后重开终端。
-
 不需要代理时也可以只做身份/配置隔离：
 
 ```powershell
@@ -96,9 +74,11 @@ cac env create personal
 cac env create work -c 2.1.81
 ```
 
-### 常用流程
+如果新开的 CMD / PowerShell 里找不到 `claude`，先重开终端；仍然找不到时，把 `%USERPROFILE%\.cac\bin` 加入用户 PATH。
 
-#### 查看当前状态
+## 常用流程
+
+### 查看当前状态
 
 ```powershell
 cac env ls
@@ -107,7 +87,7 @@ cac env check -d
 cac -v
 ```
 
-#### 创建和切换环境
+### 创建和切换环境
 
 ```powershell
 # 创建并自动激活环境
@@ -132,7 +112,7 @@ cac work
 cac env ls
 ```
 
-#### 修改环境
+### 修改环境
 
 ```powershell
 # 给当前环境设置或修改代理
@@ -155,7 +135,7 @@ cac env set work autoupdate off
 cac env rm work
 ```
 
-#### 管理 Claude Code 版本
+### 管理 Claude Code 版本
 
 ```powershell
 cac claude install latest
@@ -168,7 +148,7 @@ cac claude prune --yes
 cac claude uninstall 2.1.81
 ```
 
-#### 启动 Claude Code
+### 启动 Claude Code
 
 ```powershell
 # 确认已经激活目标环境
@@ -178,7 +158,7 @@ cac env check
 claude
 ```
 
-代理可选：
+## 代理格式
 
 ```text
 host:port:user:pass
@@ -189,43 +169,33 @@ http://u:p@host:port
 
 代理不是必填项；不加 `-p` 时，环境仍然会隔离 `.claude` 配置、身份信息和 Claude Code 版本。
 
-### 全部命令
+## 命令速查
 
-| 命令 | 说明 |
-|:---|:---|
-| `cac env create <name> [-p proxy] [-c ver] [--clone] [--autoupdate]` | 创建并激活环境 |
-| `cac <name>` | 激活环境（快捷方式） |
+| 命令 | 用途 |
+|:--|:--|
+| `cac env create <name> [-p proxy] [-c version] [--clone] [--autoupdate]` | 创建并激活环境 |
+| `cac <name>` | 切换到指定环境 |
 | `cac env ls` / `cac ls` | 查看环境列表 |
 | `cac env rm <name>` | 删除环境 |
 | `cac env set [name] proxy <proxy>` | 设置环境代理 |
 | `cac env set [name] proxy --remove` | 移除环境代理 |
-| `cac env set [name] version <ver>` | 切换环境绑定的 Claude Code 版本 |
+| `cac env set [name] version <version>` | 切换环境绑定的 Claude Code 版本 |
 | `cac env set [name] autoupdate <on\|off>` | 开启或关闭激活时的 Claude Code 更新检查 |
-| `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
-| `cac claude install [latest\|<ver>]` | 安装 Claude Code |
-| `cac claude uninstall <ver>` | 卸载版本 |
-| `cac claude ls` | 列出已安装版本 |
-| `cac claude pin <ver>` | 当前环境绑定版本 |
+| `cac env check [-d]` / `cac check` | 检查当前环境 |
+| `cac claude install [latest\|<version>]` | 安装 Claude Code 版本 |
+| `cac claude ls` | 查看已安装 Claude Code 版本 |
+| `cac claude pin <version>` | 当前环境绑定指定版本 |
 | `cac claude update [env]` | 将环境更新到远端最新 Claude Code |
 | `cac claude prune [--yes]` | 列出或删除未被环境引用的 Claude Code 版本 |
-| `cac self update` | 更新 cac 自身 |
-| `cac self delete` | 卸载 cac |
-| `cac -v` | 版本号 |
+| `cac claude uninstall <version>` | 卸载指定版本 |
+| `cac self delete` | 删除 cac 运行目录、wrapper 和环境数据 |
+| `cac -v` | 查看 cac 版本 |
 
-### 代理格式
+## 更新本地安装
 
-```
-host:port:user:pass       带认证（自动检测协议）
-host:port                 无认证
-socks5://u:p@host:port    指定协议
-```
+pull 新代码或移动仓库目录后，重新生成本地 shim：
 
-### 同步更新
-
-当本仓库有新提交时，在仓库目录下执行：
-
-```bash
-# Git Bash 中运行
+```powershell
 git pull
 bash build.sh
 ```
@@ -363,172 +333,17 @@ cd cac-win
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1
 ```
 
-The installer creates `cac` / `cac.cmd` / `cac.ps1` shims in the npm global directory (auto-detected via `npm config get prefix`) and adds that directory to your user PATH. Works with nvm-windows, fnm, volta, and Scoop out of the box.
+本地 shim 会记录当前 checkout 路径；仓库位置变化后必须重新执行一次。
 
-> **`cac` not found?** Reopen your terminal. If still missing, run `npm prefix -g` to confirm the directory is on your PATH.
-
-### First run
-
-```powershell
-cac -v
-cac help
-```
-
-```powershell
-# Install Claude Code binary
-cac claude install latest
-
-# Create an environment (proxy is optional)
-cac env create work -p 1.2.3.4:1080:u:p
-
-# Verify privacy protection
-cac env check
-
-# Start Claude Code (first time: type /login to authorize)
-claude
-```
-
-First initialization auto-generates `%USERPROFILE%\.cac\bin\claude.cmd`. If `claude` is not found in a new terminal, add `%USERPROFILE%\.cac\bin` to your user PATH and reopen.
-
-Proxy is optional:
-
-```powershell
-cac env create personal                  # identity isolation only
-cac env create work -c 2.1.81           # pinned version, no proxy
-```
-
-### Common workflows
-
-#### Check current status
-
-```powershell
-cac env ls
-cac env check
-cac env check -d
-cac -v
-```
-
-#### Create and switch environments
-
-```powershell
-# Create and auto-activate
-cac env create work
-
-# With proxy
-cac env create work-proxy -p 1.2.3.4:1080:u:p
-
-# With pinned Claude Code version
-cac env create legacy -c 2.1.81
-
-# Auto-update Claude Code on each activation
-cac env create work-auto --autoupdate
-
-# Clone current .claude config
-cac env create cloned --clone
-
-# Switch environment
-cac work
-
-# List environments
-cac env ls
-```
-
-#### Modify environments
-
-```powershell
-# Set or change proxy
-cac env set proxy 1.2.3.4:1080:u:p
-
-# Set proxy for a specific environment
-cac env set work proxy 1.2.3.4:1080:u:p
-
-# Remove proxy
-cac env set proxy --remove
-
-# Change Claude Code version
-cac env set version 2.1.81
-
-# Enable or disable auto-update on activation
-cac env set work autoupdate on
-cac env set work autoupdate off
-
-# Remove environment
-cac env rm work
-```
-
-#### Manage Claude Code versions
-
-```powershell
-cac claude install latest
-cac claude install 2.1.81
-cac claude ls
-cac claude pin 2.1.81
-cac claude update work
-cac claude prune
-cac claude prune --yes
-cac claude uninstall 2.1.81
-```
-
-#### Start Claude Code
-
-```powershell
-# Verify active environment
-cac env check
-
-# Start (first time: type /login to authorize)
-claude
-```
-
-### All commands
-
-| Command | Description |
-|:---|:---|
-| `cac env create <name> [-p proxy] [-c ver] [--clone] [--autoupdate]` | Create and activate environment |
-| `cac <name>` | Activate environment (shortcut) |
-| `cac env ls` / `cac ls` | List environments |
-| `cac env rm <name>` | Remove environment |
-| `cac env set [name] proxy <proxy>` | Set environment proxy |
-| `cac env set [name] proxy --remove` | Remove environment proxy |
-| `cac env set [name] version <ver>` | Change Claude Code version |
-| `cac env set [name] autoupdate <on\|off>` | Enable or disable auto-update on activation |
-| `cac env check [-d]` | Verify current environment (`-d` for details) |
-| `cac claude install [latest\|<ver>]` | Install Claude Code |
-| `cac claude uninstall <ver>` | Remove version |
-| `cac claude ls` | List installed versions |
-| `cac claude pin <ver>` | Pin current env to version |
-| `cac claude update [env]` | Update environment to latest Claude Code |
-| `cac claude prune [--yes]` | List or remove unreferenced Claude Code versions |
-| `cac self update` | Update cac itself |
-| `cac self delete` | Uninstall cac |
-| `cac -v` | Show version |
-
-### Proxy format
-
-```
-host:port:user:pass       authenticated (protocol auto-detected)
-host:port                 no auth
-socks5://u:p@host:port    explicit protocol
-```
-
-### Keeping up to date
-
-When this repository has new commits, run from inside the repo directory:
+如果你是开发者并修改了 `src/`，还需要重新生成根目录脚本：
 
 ```bash
-# Run from Git Bash
-git pull
 bash build.sh
 ```
 
-The rebuilt `cac` takes effect immediately — the shims point directly to your local checkout, so no re-installation is needed.
+如果本次更新涉及 JS 运行时文件修改（`src/fingerprint-hook.js`、`src/relay.js` 或 `src/dns_block.sh`），运行任意 cac 命令会触发同步到 `%USERPROFILE%\.cac`：
 
-If the update changed JS runtime files (`fingerprint-hook.js`, `relay.js`, or `cac-dns-guard.js`), also sync them to `~/.cac/`:
-
-```bash
-# Option 1: manual copy
-cp cac-dns-guard.js fingerprint-hook.js relay.js ~/.cac/
-
-# Option 2: trigger auto-sync via any cac command
+```powershell
 cac env ls
 ```
 
@@ -560,56 +375,21 @@ cp fingerprint-hook.js relay.js cac-dns-guard.js ~/.cac/
 ### Uninstall
 
 ```powershell
-# 1. Remove cac runtime data, wrappers, and environments
+# 删除 cac 运行目录、wrapper 和环境数据
 cac self delete
 
-# 2. Remove global shims
+# 删除 install-local-win.ps1 创建的全局 shim
 powershell -ExecutionPolicy Bypass -File .\scripts\install-local-win.ps1 -Uninstall
-
-# 3. (Optional) Delete the repository
-cd .. && Remove-Item -Recurse -Force cac-win
 ```
 
-If `cac` is already unavailable, delete `%USERPROFILE%\.cac` directly, then run step 2.
+如果 `cac` 已经不可用，可以手动删除 `%USERPROFILE%\.cac`，再从仓库根目录执行上面的 `-Uninstall` 命令。
 
-### Windows known limitations
+## Windows 注意事项
 
-- **Git Bash is a hard dependency** — core logic is Bash. `cac.cmd` / `cac.ps1` auto-locate Git Bash and delegate to it. A clear error with a download link is shown if Git Bash is not found.
-- **Shell shim layer is inactive** — `shim-bin/` scripts (`ioreg`, `ifconfig`, `hostname`, `cat`) are Unix commands and have no effect on Windows. Windows fingerprint protection relies entirely on `fingerprint-hook.js` (intercepts `wmic`, `reg query`, etc.).
-- **Docker mode is Linux-only** — sing-box TUN network isolation does not support Windows. Use WSL2 + Docker Desktop as an alternative.
-
-See [`docs/windows/`](docs/windows/) for the full Windows support assessment and known issues.
-
----
-
-### Privacy protection
-
-| Feature | How |
-|:---|:---|
-| Hardware UUID isolation | Windows: `wmic`+`reg query` hook; macOS: `ioreg`; Linux: `machine-id` |
-| Hostname / MAC isolation | Node.js `os.hostname()` / `os.networkInterfaces()` hook (Windows) |
-| Node.js fingerprint hook | `fingerprint-hook.js` via `NODE_OPTIONS --require` |
-| Telemetry blocking | DNS guard + env vars + fetch interception |
-| Health check bypass | In-process Node.js interception (no `/etc/hosts`, no admin rights) |
-| mTLS client certificates | Self-signed CA + per-environment client certs |
-| `.claude` config isolation | Per-environment `CLAUDE_CONFIG_DIR` |
-
-### How it works
-
-```
-              cac wrapper (process-level, zero source invasion)
-              ┌──────────────────────────────────────────┐
-  claude ────►│  CLAUDE_CONFIG_DIR → isolated config dir   │
-              │  Version resolve → ~/.cac/versions/<ver>   │
-              │  Health check bypass (in-process)           │
-              │  Env vars: 12-layer telemetry kill         │──► Proxy ──► Anthropic API
-              │  NODE_OPTIONS: DNS guard + fingerprint     │
-              │  PATH: device fingerprint shims (Unix)     │
-              │  mTLS: client cert injection               │
-              └──────────────────────────────────────────┘
-```
-
----
+- `cac.cmd` 和 `cac.ps1` 需要能找到 Git Bash；如果启动失败，先确认 Git for Windows 安装完整。
+- Windows 的指纹保护主要依赖 Node.js 层的 `fingerprint-hook.js`，用于拦截 `wmic`、`reg query`、`os.hostname()`、`os.networkInterfaces()` 等调用。
+- Docker 模式需要原生 Linux；Windows 用户优先使用 `cac env`，确实需要 Docker 隔离时再考虑 WSL2 + Docker Desktop。
+- 如果代理不处理 IPv6，建议在系统或网卡层面关闭 IPv6，避免真实 IPv6 出口泄露。
 
 ## 更多文档
 
@@ -620,11 +400,3 @@ See [`docs/windows/`](docs/windows/) for the full Windows support assessment and
 - [Windows IPv6 测试指南](docs/windows/ipv6-test-guide.md)
 - [Windows 支持评估](docs/windows/windows-support-assessment.md)
 - [上游文档站](https://cac.nextmind.space/docs)
-
----
-
-<div align="center">
-
-Fork of <a href="https://github.com/nmhjklnm/cac">nmhjklnm/cac</a> · MIT License
-
-</div>
