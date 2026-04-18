@@ -1,5 +1,14 @@
 # ── mTLS client certificate management ─────────────────────────────────────────
 
+# Convert MSYS path to Windows native path for OpenSSL on Windows.
+# When MSYS_NO_PATHCONV=1 is set, MinGW OpenSSL cannot parse /c/Users/... paths.
+_openssl_path() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) cygpath -w "$1" 2>/dev/null || echo "$1" ;;
+        *) echo "$1" ;;
+    esac
+}
+
 _openssl() {
     local openssl_bin="openssl"
     case "$(uname -s)" in
@@ -40,15 +49,15 @@ _generate_ca_cert() {
     mkdir -p "$ca_dir"
 
     # generate CA private key (4096-bit RSA)
-    _openssl genrsa -out "$ca_key" 4096 2>/dev/null || {
+    _openssl genrsa -out "$(_openssl_path "$ca_key")" 4096 2>/dev/null || {
         echo "error: failed to generate CA private key" >&2; return 1
     }
     chmod 600 "$ca_key"
 
     # generate self-signed CA cert (valid for 10 years)
     _openssl req -new -x509 \
-        -key "$ca_key" \
-        -out "$ca_cert" \
+        -key "$(_openssl_path "$ca_key")" \
+        -out "$(_openssl_path "$ca_cert")" \
         -days 3650 \
         -subj "/CN=cac-privacy-ca/O=cac/OU=mtls" \
         -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
@@ -76,15 +85,15 @@ _generate_client_cert() {
     local client_cert="$env_dir/client_cert.pem"
 
     # generate client private key (2048-bit RSA)
-    _openssl genrsa -out "$client_key" 2048 2>/dev/null || {
+    _openssl genrsa -out "$(_openssl_path "$client_key")" 2048 2>/dev/null || {
         echo "error: failed to generate client private key" >&2; return 1
     }
     chmod 600 "$client_key"
 
     # generate CSR
     _openssl req -new \
-        -key "$client_key" \
-        -out "$client_csr" \
+        -key "$(_openssl_path "$client_key")" \
+        -out "$(_openssl_path "$client_csr")" \
         -subj "/CN=cac-client-${name}/O=cac/OU=env-${name}" \
         2>/dev/null || {
         echo "error: failed to generate CSR" >&2; return 1
@@ -96,13 +105,13 @@ _generate_client_cert() {
     printf "keyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth" > "$_tmp_ext"
 
     _openssl x509 -req \
-        -in "$client_csr" \
-        -CA "$ca_cert" \
-        -CAkey "$ca_key" \
+        -in "$(_openssl_path "$client_csr")" \
+        -CA "$(_openssl_path "$ca_cert")" \
+        -CAkey "$(_openssl_path "$ca_key")" \
         -CAcreateserial \
-        -out "$client_cert" \
+        -out "$(_openssl_path "$client_cert")" \
         -days 365 \
-        -extfile "$_tmp_ext" \
+        -extfile "$(_openssl_path "$_tmp_ext")" \
         2>/dev/null || {
         rm -f "$_tmp_ext"
         echo "error: failed to sign client cert" >&2; return 1
@@ -134,12 +143,12 @@ _check_mtls() {
     fi
 
     # verify certificate chain
-    if _openssl verify -CAfile "$ca_cert" "$client_cert" >/dev/null 2>&1; then
+    if _openssl verify -CAfile "$(_openssl_path "$ca_cert")" "$(_openssl_path "$client_cert")" >/dev/null 2>&1; then
         # check certificate expiry
         local expiry
-        expiry=$(_openssl x509 -in "$client_cert" -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+        expiry=$(_openssl x509 -in "$(_openssl_path "$client_cert")" -noout -enddate 2>/dev/null | cut -d= -f2 || true)
         local cn
-        cn=$(_openssl x509 -in "$client_cert" -noout -subject 2>/dev/null | sed 's/.*CN *= *//' || true)
+        cn=$(_openssl x509 -in "$(_openssl_path "$client_cert")" -noout -subject 2>/dev/null | sed 's/.*CN *= *//' || true)
         echo "$(_green "✓") mTLS certificate valid (CN=$cn, expires: $expiry)"
         return 0
     else
