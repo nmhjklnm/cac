@@ -12,12 +12,20 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 # (nvm-windows, fnm, volta, Scoop) get shims in a directory that's actually on PATH.
 # Falls back to %APPDATA%\npm if `npm config get prefix` is unavailable.
 function Get-NpmGlobalBin {
+    # Try npm prefix -g first (most reliable across Node managers)
     try {
-        $npmCmd = Get-Command npm -ErrorAction Stop
-        $prefix = (& $npmCmd.Source config get prefix 2>$null | Select-Object -First 1)
+        $prefix = (npm prefix -g 2>$null | Select-Object -First 1)
         if ($prefix) {
             $prefix = $prefix.Trim()
             if ($prefix) { return $prefix }
+        }
+    } catch {}
+    # Fallback: npm config get prefix via cmd.exe to avoid PowerShell .cmd shim issues
+    try {
+        $prefix = (cmd.exe /c "npm config get prefix" 2>$null | Select-Object -First 1)
+        if ($prefix) {
+            $prefix = $prefix.Trim()
+            if ($prefix -and $prefix -notmatch 'Unknown|Error|not recognized') { return $prefix }
         }
     } catch {}
     if ($env:APPDATA) {
