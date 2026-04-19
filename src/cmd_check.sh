@@ -206,8 +206,8 @@ try {
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
         if ! _proxy_reachable "$proxy"; then
-            echo "    $(_red "✗") proxy      unreachable"
-            problems+=("proxy unreachable: $proxy")
+            echo "    $(_red "✗") proxy      unreachable or not forwarding"
+            problems+=("proxy not functional: $proxy")
         else
             local ip_tz=""
             local proxy_meta=""

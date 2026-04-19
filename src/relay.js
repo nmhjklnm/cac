@@ -3,7 +3,7 @@
 // Usage: node relay.js <listen_port> <upstream_proxy_url> [pid_file]
 //
 // Listens on 127.0.0.1:<port> as an HTTP proxy, forwards upstream via:
-//   - HTTP CONNECT (for http:// upstream)
+//   - HTTP CONNECT (for http:// and https:// upstream)
 //   - SOCKS5 (for socks5:// upstream)
 //
 // Safety: fail-closed design — if relay dies, HTTPS_PROXY points to dead port,
@@ -11,6 +11,7 @@
 'use strict';
 
 var net = require('net');
+var tls = require('tls');
 var fs = require('fs');
 
 // ── Parse CLI args ──────────────────────────────────────────────
@@ -26,12 +27,25 @@ if (!listenPort || !upstreamUrl) {
 
 var upstream = new URL(upstreamUrl);
 var upstreamHost = upstream.hostname;
-var upstreamPort = parseInt(upstream.port, 10);
 var upstreamUser = decodeURIComponent(upstream.username || '');
 var upstreamPass = decodeURIComponent(upstream.password || '');
 var isSocks5 = upstream.protocol === 'socks5:';
+var isHttpsProxy = upstream.protocol === 'https:';
+var upstreamPort = parseInt(upstream.port || (isHttpsProxy ? '443' : (isSocks5 ? '1080' : '80')), 10);
 
 function log(msg) { process.stderr.write('[cac-relay] ' + msg + '\n'); }
+
+function connectProxySocket(onConnect) {
+  if (isHttpsProxy) {
+    return tls.connect({
+      host: upstreamHost,
+      port: upstreamPort,
+      servername: upstreamHost,
+      rejectUnauthorized: false
+    }, onConnect);
+  }
+  return net.connect(upstreamPort, upstreamHost, onConnect);
+}
 
 // ── Global error handlers (never crash from unhandled errors) ───
 
@@ -49,8 +63,14 @@ var HEARTBEAT_INTERVAL = 30000; // 30s
 var HEARTBEAT_TIMEOUT = 5000;   // 5s connect timeout
 
 function heartbeat() {
-  var sock = net.connect({ port: upstreamPort, host: upstreamHost, timeout: HEARTBEAT_TIMEOUT });
+  var sock = connectProxySocket(function() {
+    if (!_upstreamHealthy) log('upstream recovered: ' + upstreamHost + ':' + upstreamPort);
+    _upstreamHealthy = true;
+    sock.destroy();
+  });
+  sock.setTimeout(HEARTBEAT_TIMEOUT);
   sock.on('connect', function() {
+    if (isHttpsProxy) return;
     if (!_upstreamHealthy) log('upstream recovered: ' + upstreamHost + ':' + upstreamPort);
     _upstreamHealthy = true;
     sock.destroy();
@@ -162,7 +182,7 @@ function socks5Connect(targetHost, targetPort, cb) {
 // ── HTTP CONNECT upstream ───────────────────────────────────────
 
 function httpConnect(targetHost, targetPort, cb) {
-  var sock = net.connect(upstreamPort, upstreamHost, function() {
+  var sock = connectProxySocket(function() {
     var connectReq = 'CONNECT ' + targetHost + ':' + targetPort + ' HTTP/1.1\r\n' +
                      'Host: ' + targetHost + ':' + targetPort + '\r\n';
     if (upstreamUser) {
@@ -306,7 +326,7 @@ function handleConnect(clientSock, targetHost, targetPort, headerRest) {
 
 function handlePlainHttp(clientSock, firstLine, headerRest) {
   // For plain HTTP requests, forward directly to upstream proxy
-  var sock = net.connect(upstreamPort, upstreamHost, function() {
+  var sock = connectProxySocket(function() {
     var authHeader = '';
     if (upstreamUser) {
       var cred = Buffer.from(upstreamUser + ':' + upstreamPass).toString('base64');

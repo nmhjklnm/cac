@@ -25,6 +25,7 @@ echo "════════════════════════�
 # source utils
 source "$PROJECT_DIR/src/utils.sh" 2>/dev/null || { echo "FATAL: cannot source utils.sh"; exit 1; }
 source "$PROJECT_DIR/src/cmd_claude.sh" 2>/dev/null || { echo "FATAL: cannot source cmd_claude.sh"; exit 1; }
+source "$PROJECT_DIR/src/mtls.sh" 2>/dev/null || { echo "FATAL: cannot source mtls.sh"; exit 1; }
 
 # ── T01: 平台检测 ──
 echo ""
@@ -217,6 +218,160 @@ grep -q '/c/Program Files/Git/mingw64/bin/openssl.exe' "$PROJECT_DIR/src/mtls.sh
 echo ""
 echo "[T19] env check read 兼容 set -e"
 grep -q 'read -r proxy_ip ip_tz .*|| true' "$PROJECT_DIR/src/cmd_check.sh" && pass "proxy metadata read 已防止提前退出" || fail "proxy metadata read 仍可能提前退出"
+
+# ── T20: proxy 协议级检查 ──
+echo ""
+echo "[T20] proxy 协议级检查 (_proxy_check)"
+tmp_proxy_dir=$(mktemp -d "$PROJECT_DIR/.tmp-proxy-check.XXXXXX")
+http_port_file="$tmp_proxy_dir/http.port"
+socks_port_file="$tmp_proxy_dir/socks.port"
+https_port_file="$tmp_proxy_dir/https.port"
+proxy_pids=()
+
+_wait_port_file() {
+    local file="$1"
+    local i
+    for i in {1..50}; do
+        [[ -s "$file" ]] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+node -e "
+const http = require('http');
+const fs = require('fs');
+const portFile = process.argv[1];
+const expected = 'Basic ' + Buffer.from('u:p').toString('base64');
+const srv = http.createServer();
+srv.on('connect', (req, socket) => {
+  if (req.url !== 'api.ipify.org:443') {
+    socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+    return;
+  }
+  if (req.headers['proxy-authorization'] !== expected) {
+    socket.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\n');
+    return;
+  }
+  socket.end('HTTP/1.1 200 Connection Established\r\n\r\n');
+});
+srv.listen(0, '127.0.0.1', () => fs.writeFileSync(portFile, String(srv.address().port)));
+setTimeout(() => srv.close(() => process.exit(0)), 15000);
+" "$http_port_file" &
+proxy_pids+=("$!")
+
+node -e "
+const net = require('net');
+const fs = require('fs');
+const portFile = process.argv[1];
+const srv = net.createServer((sock) => {
+  let state = 'greeting';
+  let buf = Buffer.alloc(0);
+  sock.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    if (state === 'greeting') {
+      if (buf.length < 2) return;
+      sock.write(Buffer.from([0x05, 0x02]));
+      buf = buf.slice(2 + buf[1]);
+      state = 'auth';
+    }
+    if (state === 'auth') {
+      if (buf.length < 2) return;
+      const ulen = buf[1];
+      if (buf.length < 3 + ulen) return;
+      const plen = buf[2 + ulen];
+      if (buf.length < 3 + ulen + plen) return;
+      const user = buf.slice(2, 2 + ulen).toString();
+      const pass = buf.slice(3 + ulen, 3 + ulen + plen).toString();
+      const ok = user === 'u' && pass === 'p';
+      sock.write(Buffer.from([0x01, ok ? 0x00 : 0x01]));
+      buf = buf.slice(3 + ulen + plen);
+      if (!ok) {
+        sock.destroy();
+        return;
+      }
+      state = 'connect';
+    }
+    if (state === 'connect') {
+      if (buf.length < 7) return;
+      sock.end(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+    }
+  });
+});
+srv.listen(0, '127.0.0.1', () => fs.writeFileSync(portFile, String(srv.address().port)));
+setTimeout(() => srv.close(() => process.exit(0)), 15000);
+" "$socks_port_file" &
+proxy_pids+=("$!")
+
+if _wait_port_file "$http_port_file" && _wait_port_file "$socks_port_file"; then
+    http_port=$(cat "$http_port_file")
+    socks_port=$(cat "$socks_port_file")
+    _proxy_check "http://u:p@127.0.0.1:$http_port" 2 \
+        && pass "HTTP CONNECT + 正确认证通过" \
+        || fail "HTTP CONNECT + 正确认证失败"
+    ! _proxy_check "http://bad:creds@127.0.0.1:$http_port" 2 \
+        && pass "HTTP 407 认证失败不会误报可用" \
+        || fail "HTTP 407 被误报为可用"
+    _proxy_check "socks5://u:p@127.0.0.1:$socks_port" 2 \
+        && pass "SOCKS5 认证 + CONNECT 通过" \
+        || fail "SOCKS5 认证 + CONNECT 失败"
+    ! _proxy_check "socks5://bad:creds@127.0.0.1:$socks_port" 2 \
+        && pass "SOCKS5 错误认证不会误报可用" \
+        || fail "SOCKS5 错误认证被误报为可用"
+else
+    fail "mock HTTP/SOCKS5 proxy 启动失败"
+fi
+
+if _openssl version >/dev/null 2>&1; then
+    https_port_file_native=$(_openssl_path "$https_port_file")
+    https_key_native=$(_openssl_path "$tmp_proxy_dir/key.pem")
+    https_cert_native=$(_openssl_path "$tmp_proxy_dir/cert.pem")
+    if ! _openssl req -x509 -newkey rsa:2048 -nodes \
+        -keyout "$https_key_native" \
+        -out "$https_cert_native" \
+        -subj "/CN=127.0.0.1" -days 1 >/dev/null 2>&1; then
+        skip "OpenSSL 生成测试证书失败，跳过 HTTPS proxy mock"
+    else
+    node -e "
+const tls = require('tls');
+const fs = require('fs');
+const portFile = process.argv[1];
+const srv = tls.createServer({
+  key: fs.readFileSync(process.argv[2]),
+  cert: fs.readFileSync(process.argv[3])
+}, (sock) => {
+  let buf = Buffer.alloc(0);
+  sock.on('error', () => {});
+  sock.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    if (buf.indexOf('\r\n\r\n') === -1) return;
+    const first = buf.slice(0, buf.indexOf('\r\n')).toString();
+    sock.end(first === 'CONNECT api.ipify.org:443 HTTP/1.1'
+      ? 'HTTP/1.1 200 Connection Established\r\n\r\n'
+      : 'HTTP/1.1 403 Forbidden\r\n\r\n');
+  });
+});
+srv.listen(0, '127.0.0.1', () => fs.writeFileSync(portFile, String(srv.address().port)));
+setTimeout(() => srv.close(() => process.exit(0)), 15000);
+" "$https_port_file_native" "$https_key_native" "$https_cert_native" &
+        proxy_pids+=("$!")
+        if _wait_port_file "$https_port_file"; then
+            https_port=$(cat "$https_port_file")
+            _proxy_check "https://127.0.0.1:$https_port" 2 \
+                && pass "HTTPS proxy 使用 TLS 后 CONNECT 通过" \
+                || fail "HTTPS proxy TLS CONNECT 失败"
+        else
+            fail "mock HTTPS proxy 启动失败"
+        fi
+    fi
+else
+    skip "OpenSSL 不可用，跳过 HTTPS proxy mock"
+fi
+
+for pid in "${proxy_pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+done
+rm -rf "$tmp_proxy_dir"
 
 # ── 总结 ──
 echo ""

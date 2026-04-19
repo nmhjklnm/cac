@@ -201,6 +201,13 @@ s.on('error', () => process.exit(1));
 " "$host" "$port" "$timeout_sec" >/dev/null 2>&1
 }
 
+_proxy_check() {
+    local proxy_url="$1" timeout_sec="${2:-3}"
+    node -e "
+(function(){var url=process.argv[1],timeout=Number(process.argv[2])*1000,targetHost='api.ipify.org',targetPort=443,parsed=new URL(url),proto=parsed.protocol.replace(/:$/,'').toLowerCase(),host=parsed.hostname,port=parseInt(parsed.port||(proto==='https'?'443':((proto==='socks5'||proto==='socks5h')?'1080':'80')),10),user=decodeURIComponent(parsed.username||''),pass=decodeURIComponent(parsed.password||''),net=require('net'),tls=require('tls'),sock,done=false;function finish(code){if(done)return;done=true;try{if(sock)sock.destroy()}catch(_){}process.exit(code)}function sendSocksConnect(){var hostBuf=Buffer.from(targetHost);if(hostBuf.length>255)finish(1);var req=Buffer.alloc(5+hostBuf.length+2);req[0]=0x05;req[1]=0x01;req[2]=0x00;req[3]=0x03;req[4]=hostBuf.length;hostBuf.copy(req,5);req.writeUInt16BE(targetPort,5+hostBuf.length);sock.write(req)}function checkSocks5(){var hasAuth=user&&pass;sock.write(Buffer.from([0x05,0x01,hasAuth?0x02:0x00]));var state='greeting',buf=Buffer.alloc(0);sock.on('data',function(chunk){buf=Buffer.concat([buf,chunk]);if(state==='greeting'){if(buf.length<2)return;var method=buf[1];buf=buf.slice(2);if(method===0xFF)finish(1);if(method===0x02){if(!hasAuth||user.length>255||pass.length>255)finish(1);var uBuf=Buffer.from(user),pBuf=Buffer.from(pass),authReq=Buffer.alloc(3+uBuf.length+pBuf.length);authReq[0]=0x01;authReq[1]=uBuf.length;uBuf.copy(authReq,2);authReq[2+uBuf.length]=pBuf.length;pBuf.copy(authReq,3+uBuf.length);sock.write(authReq);state='auth'}else if(method===0x00){sendSocksConnect();state='connect'}else{finish(1)}}else if(state==='auth'){if(buf.length<2)return;if(buf[1]!==0x00)finish(1);buf=buf.slice(2);sendSocksConnect();state='connect'}else if(state==='connect'){if(buf.length<4)return;finish(buf[1]===0x00?0:1)}})}function checkHttpConnect(){var connectReq='CONNECT '+targetHost+':'+targetPort+' HTTP/1.1\r\nHost: '+targetHost+':'+targetPort+'\r\n';if(user){var cred=Buffer.from(user+':'+pass).toString('base64');connectReq+='Proxy-Authorization: Basic '+cred+'\r\n'}connectReq+='\r\n';sock.write(connectReq);var buf=Buffer.alloc(0);sock.on('data',function(chunk){buf=Buffer.concat([buf,chunk]);var idx=buf.indexOf('\r\n\r\n');if(idx===-1)return;var statusLine=buf.slice(0,buf.indexOf('\r\n')).toString();var code=parseInt(statusLine.split(' ')[1],10);finish(code===200?0:1)})}function onConnect(){if(proto==='socks5'||proto==='socks5h')checkSocks5();else if(proto==='http'||proto==='https')checkHttpConnect();else finish(1)}if(proto==='https')sock=tls.connect({host:host,port:port,servername:host,rejectUnauthorized:false},onConnect);else sock=net.connect({host:host,port:port},onConnect);sock.setTimeout(timeout);sock.on('error',function(){finish(1)});sock.on('timeout',function(){finish(1)})})(undefined);
+" "$proxy_url" "$timeout_sec" >/dev/null 2>&1
+}
+
 _count_claude_processes() {
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
@@ -311,12 +318,10 @@ if [[ -f "$_env_dir/proxy" ]]; then
 fi
 
 if [[ -n "$PROXY" ]]; then
-    # pre-flight: proxy connectivity (pure bash, no fork)
-    _hp="${PROXY##*@}"; _hp="${_hp##*://}"
-    _host="${_hp%%:*}"
-    _port="${_hp##*:}"
-    if ! _tcp_check "$_host" "$_port"; then
-        echo "[cac] error: [$_name] proxy $_hp unreachable, refusing to start." >&2
+    # pre-flight: protocol-aware proxy validation
+    if ! _proxy_check "$PROXY"; then
+        echo "[cac] error: [$_name] proxy not reachable or not forwarding, refusing to start." >&2
+        echo "[cac] hint: check that your proxy tool is enabled and routing traffic" >&2
         echo "[cac] hint: run 'cac check' to diagnose, or 'cac stop' to disable temporarily" >&2
         exit 1
     fi
