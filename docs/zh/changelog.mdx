@@ -5,6 +5,18 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.5
+<sub>2026-04-22</sub>
+
+**修复：代理启动与诊断结果一致性**
+
+本次将 `1.5.5` beta 线提升为正式版，前提是已对新的代理链路行为做过完整验证。
+
+- 对历史保存的旧版 SOCKS5 URI `socks5://host:port:user:pass`，现在会在启动检查、relay 启动和环境诊断前统一规范化为标准格式 `socks5://user:pass@host:port`。
+- `cac env check` 不再把“已配置代理但所有出口 IP 探测都失败”的状态误判为健康，出口 IP 无法验证现在会作为真实问题上报。
+- 生成出来的 `claude` wrapper 现已内联代理规范化逻辑，不再依赖主 `cac` 脚本中的 helper，修复了 beta.1 的启动回归。
+- CI 现在会校验 `package.json`、`src/utils.sh` 和提交的 `cac` 三处版本元数据是否一致，不一致直接失败。
+
 ## v1.5.5-beta.2
 <sub>2026-04-22</sub>
 

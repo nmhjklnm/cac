@@ -5,6 +5,18 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.5
+<sub>2026-04-22</sub>
+
+**Fix: proxy startup and diagnostics consistency**
+
+This release promotes the `1.5.5` beta line to stable after validating the new proxy-path behavior end to end.
+
+- Legacy SOCKS5 proxy URIs stored as `socks5://host:port:user:pass` are now normalized to the standard `socks5://user:pass@host:port` form before startup checks, relay startup, and environment diagnostics.
+- `cac env check` no longer reports a configured proxy as healthy when exit IP detection fails across all probe endpoints. Failed exit-IP verification now surfaces as a real problem instead of a retry hint.
+- The generated `claude` wrapper now performs proxy normalization without depending on helper functions from the main `cac` script, fixing the beta.1 startup regression.
+- CI now fails if `package.json`, `src/utils.sh`, and committed `cac` drift out of sync on version metadata.
+
 ## v1.5.5-beta.2
 <sub>2026-04-22</sub>
 
