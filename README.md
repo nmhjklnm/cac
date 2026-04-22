@@ -102,6 +102,9 @@ cac env rm <name>                       # 删除环境
 cac env set [name] proxy <url>          # 设置 / 修改代理
 cac env set [name] proxy --remove       # 移除代理
 cac env set [name] version <ver>        # 切换版本
+cac env sessions ls [env]               # 查看某环境里的会话项目
+cac env sessions copy work personal     # 拷贝 work 的会话到 personal
+cac env sessions move work personal     # 移动会话（源环境会被清空）
 cac <name>                              # 激活环境（快捷方式）
 cac ls                                  # = cac env ls
 ```
@@ -126,6 +129,9 @@ cac ls                                  # = cac env ls
 | `cac env ls` | 列出环境 |
 | `cac env rm <name>` | 删除环境 |
 | `cac env set [name] <key> <value>` | 修改环境（proxy / version / telemetry / persona） |
+| `cac env sessions ls [env]` | 列出环境中的 Claude Code 会话项目 |
+| `cac env sessions copy <from> <to> [--project <name>] [--session <id>] [--overwrite]` | 在环境间拷贝会话上下文 |
+| `cac env sessions move <from> <to> [--project <name>] [--session <id>] [--overwrite]` | 在环境间移动会话上下文 |
 | `cac env check [-d]` | 验证当前环境（`-d` 显示详情） |
 | `cac <name>` | 激活环境 |
 | **自管理** | |
@@ -287,6 +293,9 @@ cac env rm <name>                       # remove environment
 cac env set [name] proxy <url>          # set / change proxy
 cac env set [name] proxy --remove       # remove proxy
 cac env set [name] version <ver>        # change version
+cac env sessions ls [env]               # list session projects in an env
+cac env sessions copy work personal     # copy sessions from work to personal
+cac env sessions move work personal     # move sessions and clear the source
 cac <name>                              # activate (shortcut)
 cac ls                                  # = cac env ls
 ```
@@ -311,6 +320,9 @@ Each environment is fully isolated:
 | `cac env ls` | List environments |
 | `cac env rm <name>` | Remove environment |
 | `cac env set [name] <key> <value>` | Modify environment (proxy / version / telemetry / persona) |
+| `cac env sessions ls [env]` | List Claude Code session projects in an environment |
+| `cac env sessions copy <from> <to> [--project <name>] [--session <id>] [--overwrite]` | Copy session context between environments |
+| `cac env sessions move <from> <to> [--project <name>] [--session <id>] [--overwrite]` | Move session context between environments |
 | `cac env check [-d]` | Verify current environment (`-d` for details) |
 | `cac <name>` | Activate environment |
 | **Self-management** | |
