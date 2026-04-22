@@ -26,7 +26,7 @@ _env_cmd_create() {
         esac
     done
 
-    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--telemetry <mode>] [--persona <preset>]"
+    [[ -n "$name" ]] || _die "usage: cac env create <name> [-p <proxy>] [-c <version>] [--clone [source]] [--no-link] [--telemetry <mode>] [--persona <preset>]"
     [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || _die "invalid name '$name' (use alphanumeric, dash, underscore)"
 
     local env_dir="$ENVS_DIR/$name"
@@ -424,8 +424,9 @@ cmd_env() {
             echo
             echo "  $(_bold "cac env") — environment management"
             echo
-            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--telemetry mode] [--persona preset]"
+            echo "    $(_green "create") <name> [-p proxy] [-c ver] [--clone [source]] [--no-link] [--telemetry mode] [--persona preset]"
             echo "                             Create isolated environment (auto-activates)"
+            echo "                             --clone inherits commands/hooks/skills/plugins; --no-link copies instead of symlink"
             echo "    $(_green "set") [name] <key> <value>        Modify environment"
             echo "                             proxy, version, telemetry, or persona"
             echo "    $(_green "ls")              List all environments"
