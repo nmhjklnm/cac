@@ -189,6 +189,14 @@ cmd_check() {
     # ── network check (slow — streaming output) ──
     local proxy_ip=""
     if [[ -n "$proxy" ]]; then
+        # VPN compatibility
+        local _vpn_detected
+        _vpn_detected=$(_detect_vpn 2>/dev/null || true)
+        if [[ -n "$_vpn_detected" ]]; then
+            local _vpn_type="${_vpn_detected%%:*}"
+            echo "    $(_yellow "!") vpn        $_vpn_type detected -- check DIRECT rule for proxy IP"
+        fi
+
         if ! _proxy_reachable "$proxy"; then
             echo "    $(_red "✗") proxy      unreachable"
             problems+=("proxy unreachable: $proxy")
@@ -206,6 +214,29 @@ cmd_check() {
             # Overwrite the "detecting..." line
             if [[ -n "$proxy_ip" ]]; then
                 printf "\r    $(_green "✓") exit IP    $(_cyan "$proxy_ip")\033[K\n"
+                # IP watchdog: compare with expected IP
+                local expected_ip; expected_ip=$(_read "$env_dir/expected_ip" "")
+                if [[ -n "$expected_ip" ]]; then
+                    if [[ "$proxy_ip" != "$expected_ip" ]]; then
+                        echo "    $(_red "✗") watchdog   IP changed! expected $(_cyan "$expected_ip") got $(_red "$proxy_ip")"
+                        problems+=("exit IP mismatch: expected=$expected_ip actual=$proxy_ip")
+                    else
+                        echo "    $(_green "✓") watchdog   IP stable $(_dim "(monitoring active)")"
+                    fi
+                else
+                    # First time: save as baseline
+                    echo "$proxy_ip" > "$env_dir/expected_ip"
+                    echo "    $(_green "✓") watchdog   baseline saved: $(_cyan "$proxy_ip")"
+                fi
+                # IP watchdog process status
+                if [[ -f "$CAC_DIR/ip-watchdog.pid" ]]; then
+                    local _wd_pid; _wd_pid=$(tr -d '[:space:]' < "$CAC_DIR/ip-watchdog.pid")
+                    if [[ -n "$_wd_pid" ]] && kill -0 "$_wd_pid" 2>/dev/null; then
+                        echo "    $(_green "✓") ip-monitor running $(_dim "(pid $_wd_pid, every 60s)")"
+                    else
+                        echo "    $(_yellow "!") ip-monitor not running $(_dim "(will start on next claude launch)")"
+                    fi
+                fi
                 # TZ vs exit IP consistency check
                 local env_tz; env_tz=$(_read "$env_dir/tz" "")
                 if [[ -n "$env_tz" ]] && [[ -n "$proxy_ip" ]]; then

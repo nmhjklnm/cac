@@ -160,6 +160,19 @@ set "HTTP_PROXY=!PROXY!"
 set "ALL_PROXY=!PROXY!"
 set "NO_PROXY=localhost,127.0.0.1"
 
+REM derive proxy host for VPN hint
+set "_hostport=!PROXY!"
+if not "!_hostport:*@=!"=="!_hostport!" set "_hostport=!_hostport:*@=!"
+if not "!_hostport:*://=!"=="!_hostport!" set "_hostport=!_hostport:*://=!"
+for /f "tokens=1 delims=:" %%i in ("!_hostport!") do set "_host=%%~i"
+
+REM VPN compatibility hint
+where tasklist >nul 2>&1 && (
+    tasklist /FO CSV /NH 2>nul | findstr /I "mihomo clash-verge v2rayN sing-box" >nul 2>&1 && (
+        echo [cac] hint: VPN detected. Ensure !_host! has a DIRECT rule to avoid hijacking >&2
+    )
+)
+
 REM telemetry kill switches
 set "CLAUDE_CODE_SKIP_AUTO_UPDATE=1"
 set "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
@@ -224,6 +237,213 @@ exit /b !ERRORLEVEL!
     $wrapperPath = Join-Path $binDir "claude.cmd"
     Set-Content $wrapperPath $wrapperContent -Encoding ASCII
     Write-Host "  wrapper -> $wrapperPath"
+}
+
+# -- VPN compatibility ------------------------------------------------
+
+function Detect-VPN {
+    # Returns "vpn_name:api_port" or empty string
+    $processes = Get-Process -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ProcessName
+
+    # Clash family (mihomo, clash-verge, ClashX, etc.)
+    $clashNames = @("mihomo", "clash-meta", "clash-verge", "clash-verge-service", "Clash for Windows", "ClashX", "Clash.Meta", "FlClash", "clash", "Stash")
+    foreach ($name in $clashNames) {
+        if ($processes -match [regex]::Escape($name)) {
+            $port = Find-ClashPort
+            return "clash:$port"
+        }
+    }
+
+    # v2rayN
+    if ($processes -contains "v2rayN") {
+        return "v2rayN:"
+    }
+
+    # sing-box
+    if ($processes -contains "sing-box") {
+        return "sing-box:"
+    }
+
+    # V2Ray / Xray
+    foreach ($name in @("v2ray", "xray")) {
+        if ($processes -contains $name) {
+            return "v2ray:"
+        }
+    }
+
+    return ""
+}
+
+function Find-ClashPort {
+    # Check common config paths for external-controller
+    $configPaths = @(
+        "$env:APPDATA\clash-verge-rev\clash\config.yaml",
+        "$env:APPDATA\clash-verge\clash\config.yaml",
+        "$env:USERPROFILE\.config\mihomo\config.yaml",
+        "$env:USERPROFILE\.config\clash\config.yaml"
+    )
+    foreach ($path in $configPaths) {
+        if (Test-Path $path) {
+            $content = Get-Content $path -ErrorAction SilentlyContinue
+            $line = $content | Where-Object { $_ -match "^\s*external-controller:" } | Select-Object -First 1
+            if ($line -match ":(\d+)") {
+                return $matches[1]
+            }
+        }
+    }
+    # Probe common ports
+    foreach ($port in @(9090, 9097)) {
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $result = $tcp.BeginConnect("127.0.0.1", $port, $null, $null)
+            $success = $result.AsyncWaitHandle.WaitOne(1000)
+            $tcp.Close()
+            if ($success) { return $port }
+        } catch {}
+    }
+    return ""
+}
+
+function Get-ClashSecret {
+    $configPaths = @(
+        "$env:APPDATA\clash-verge-rev\clash\config.yaml",
+        "$env:APPDATA\clash-verge\clash\config.yaml",
+        "$env:USERPROFILE\.config\mihomo\config.yaml",
+        "$env:USERPROFILE\.config\clash\config.yaml"
+    )
+    foreach ($path in $configPaths) {
+        if (Test-Path $path) {
+            $content = Get-Content $path -ErrorAction SilentlyContinue
+            $line = $content | Where-Object { $_ -match "^\s*secret:" } | Select-Object -First 1
+            if ($line -match 'secret:\s*[''"]?([^''"#\s]+)') {
+                return $matches[1]
+            }
+        }
+    }
+    return ""
+}
+
+function Try-ClashAutoInject {
+    param([string]$ProxyIP, [string]$ApiPort)
+    if (-not $ApiPort) { return $false }
+
+    $rule = "- IP-CIDR,${ProxyIP}/32,DIRECT,no-resolve"
+    $secret = Get-ClashSecret
+    $headers = @{ "Content-Type" = "application/json" }
+    if ($secret) { $headers["Authorization"] = "Bearer $secret" }
+
+    # Get config path from API
+    try {
+        $configResp = Invoke-RestMethod -Uri "http://127.0.0.1:${ApiPort}/configs" -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+        $configPath = $configResp.path
+    } catch { return $false }
+
+    if (-not $configPath -or -not (Test-Path $configPath)) { return $false }
+
+    # Validate path: no traversal, yaml extension, must be absolute
+    if ($configPath -match "\.\.") { return $false }
+    if ($configPath -notmatch "\.(yaml|yml)$") { return $false }
+    if ($configPath -notmatch "^[A-Za-z]:[/\\]" -and $configPath -notmatch "^/") { return $false }
+    # Must be under user profile or system config dirs
+    $allowedPrefixes = @($env:USERPROFILE, $env:APPDATA, $env:LOCALAPPDATA, "$env:ProgramFiles", "${env:ProgramFiles(x86)}")
+    $pathAllowed = $false
+    foreach ($prefix in $allowedPrefixes) {
+        if ($prefix -and $configPath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $pathAllowed = $true; break }
+    }
+    if (-not $pathAllowed) { return $false }
+
+    # Check if rule already exists
+    $content = Get-Content $configPath -Raw
+    if ($content -match [regex]::Escape("IP-CIDR,${ProxyIP}/32,DIRECT")) { return $true }
+
+    # Inject rule after "rules:" line
+    $lines = Get-Content $configPath
+    $newLines = @()
+    $injected = $false
+    foreach ($line in $lines) {
+        $newLines += $line
+        if (-not $injected -and $line.Trim() -eq "rules:") {
+            $newLines += "  $rule"
+            $injected = $true
+        }
+    }
+    if (-not $injected) {
+        $newLines += ""
+        $newLines += "rules:"
+        $newLines += "  $rule"
+    }
+
+    # Backup with timestamp and write
+    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+    Copy-Item $configPath "${configPath}.cac.bak.${timestamp}" -Force -ErrorAction SilentlyContinue
+    $newLines | Set-Content $configPath -Encoding UTF8
+
+    # Reload via API
+    try {
+        $body = @{ path = $configPath } | ConvertTo-Json
+        Invoke-RestMethod -Uri "http://127.0.0.1:${ApiPort}/configs?force=true" -Method Put -Body $body -Headers $headers -TimeoutSec 5 -ErrorAction Stop
+    } catch {}
+
+    return $true
+}
+
+function Show-VPNManualGuide {
+    param([string]$ProxyIP, [string]$VPNType)
+    Write-Yellow "  ! VPN detected. Add a DIRECT rule for proxy IP $ProxyIP to avoid VPN hijacking."
+    switch ($VPNType) {
+        "clash" {
+            Write-Host "  Clash / mihomo: add this near the top of the rules: section:"
+            Write-Host "    - IP-CIDR,${ProxyIP}/32,DIRECT,no-resolve" -ForegroundColor Cyan
+            Write-Host "  Common paths: %APPDATA%\clash-verge-rev\clash\config.yaml" -ForegroundColor DarkGray
+        }
+        "v2rayN" {
+            Write-Host "  v2rayN: Settings -> Routing -> Add rule:" -ForegroundColor DarkGray
+            Write-Host "    IP: ${ProxyIP}/32  OutboundTag: direct" -ForegroundColor Cyan
+            Write-Host "  Or edit: %APPDATA%\v2rayN\guiNConfig.json" -ForegroundColor DarkGray
+        }
+        "sing-box" {
+            Write-Host "  sing-box: add to route.rules:" -ForegroundColor DarkGray
+            Write-Host "    {`"ip_cidr`": [`"${ProxyIP}/32`"], `"outbound`": `"direct`"}" -ForegroundColor Cyan
+        }
+        default {
+            Write-Host "  Add a DIRECT/bypass rule for $ProxyIP in your VPN config." -ForegroundColor DarkGray
+        }
+    }
+    Write-Host ""
+}
+
+function Ensure-VPNCompatible {
+    param([string]$ProxyUrl)
+    if (-not $ProxyUrl) { return }
+
+    $hp = Get-ProxyHostPort $ProxyUrl
+    $host_ = ($hp -split ":")[0]
+    if (-not $host_ -or $host_ -eq "127.0.0.1" -or $host_ -eq "localhost" -or $host_ -eq "::1") { return }
+
+    # Resolve hostname to IPv4 if needed
+    if ($host_ -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+        try {
+            $resolved = [System.Net.Dns]::GetHostAddresses($host_) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+            if ($resolved) { $host_ = $resolved.ToString() } else { return }
+        } catch { return }
+    }
+
+    $detected = Detect-VPN
+    if (-not $detected) { return }
+
+    $vpnType = ($detected -split ":")[0]
+    $apiPort = ($detected -split ":")[1]
+
+    Write-Yellow "  ! Detected local VPN: $vpnType"
+
+    if ($vpnType -eq "clash" -and $apiPort) {
+        if (Try-ClashAutoInject $host_ $apiPort) {
+            Write-Green "  + Added DIRECT rule for $host_ in $vpnType"
+            return
+        }
+    }
+
+    Show-VPNManualGuide $host_ $vpnType
 }
 
 # ── cmd: setup ────────────────────────────────────────────
@@ -302,6 +522,8 @@ function Cmd-Add {
         Write-Yellow "unreachable"
         Write-Host "  Warning: proxy currently unreachable"
     }
+
+    Ensure-VPNCompatible $proxy
 
     # detect timezone
     Write-Host -NoNewline "  Detecting timezone ... "
@@ -433,6 +655,13 @@ function Cmd-Check {
     Write-Host "  TZ        : $(Read-FileValue (Join-Path $envDir 'tz') '(not set)')"
     Write-Host ""
 
+    # VPN compatibility
+    $vpnDetected = Detect-VPN
+    if ($vpnDetected) {
+        $vpnType = ($vpnDetected -split ":")[0]
+        Write-Yellow "  ! vpn: $vpnType detected -- check DIRECT rule for proxy IP"
+    }
+
     Write-Host -NoNewline "  TCP test  ... "
     if (-not (Test-ProxyReachable $proxy)) {
         Write-Red "FAIL"
@@ -486,6 +715,7 @@ function Cmd-Help {
     Write-Host "  cac <name>                             Switch to env"
     Write-Host "  cac ls                                 List all envs"
     Write-Host "  cac check                              Check current env"
+    Write-Host "  cac vpn-ensure <proxy>                 Check VPN compatibility"
     Write-Host "  cac stop                               Temporarily disable"
     Write-Host "  cac -c                                 Resume from stop"
     Write-Host ""
@@ -519,6 +749,7 @@ switch ($args[0]) {
     "ls"      { Cmd-Ls }
     "list"    { Cmd-Ls }
     "check"   { Cmd-Check }
+    "vpn-ensure" { if ($args[1]) { Ensure-VPNCompatible $args[1] } else { Write-Host "Usage: cac vpn-ensure <proxy-url>" } }
     "stop"    { Cmd-Stop }
     "-c"      { Cmd-Continue }
     "help"    { Cmd-Help }
