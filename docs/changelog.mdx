@@ -5,6 +5,16 @@ description: Release history and notable changes
 
 All notable changes to this project are documented here. Each entry links to the corresponding PR or issue.
 
+## v1.5.7
+<sub>2026-04-27</sub>
+
+**Fix: `cac env create --clone` was missing `agents/`**
+
+`~/.claude/agents/` (subagent definitions) was not in the clone list, so newly created environments via `--clone` never inherited custom subagents — only `commands/hooks/skills/plugins/CLAUDE.md` were symlinked.
+
+- Added `agents` to `clone_dirs` in `cac env create`. From v1.5.7 onwards, `--clone host` and `--clone <env>` both symlink (or copy with `--no-link`) `~/.claude/agents/` alongside the other shared resources.
+- Existing environments are not auto-fixed — relink manually if needed: `ln -s ~/.claude/agents ~/.cac/envs/<name>/.claude/agents`.
+
 ## v1.5.6
 <sub>2026-04-27</sub>
 

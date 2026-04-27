@@ -5,6 +5,16 @@ description: 版本发布历史和重要变更
 
 所有重要变更记录在此，每个条目关联对应的 PR 或 Issue。
 
+## v1.5.7
+<sub>2026-04-27</sub>
+
+**修复：`cac env create --clone` 漏了 `agents/`**
+
+`~/.claude/agents/`（subagent 定义）不在克隆列表里，新建环境通过 `--clone` 时永远拿不到自定义 subagent —— 只有 `commands/hooks/skills/plugins/CLAUDE.md` 会被软链。
+
+- 在 `cac env create` 的 `clone_dirs` 里加上 `agents`。从 v1.5.7 起，`--clone host` 和 `--clone <env>` 都会和其它共享资源一起软链（或 `--no-link` 时复制）`~/.claude/agents/`。
+- 已有的环境不会自动补齐，需要手动重链：`ln -s ~/.claude/agents ~/.cac/envs/<name>/.claude/agents`。
+
 ## v1.5.6
 <sub>2026-04-27</sub>
 
