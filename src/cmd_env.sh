@@ -133,7 +133,7 @@ _env_cmd_create() {
         fi
 
         if [[ -n "$clone_source" ]] && [[ -d "$src_claude_dir" ]]; then
-            local clone_dirs="commands hooks skills plugins"
+            local clone_dirs="commands agents hooks skills plugins"
             for d in $clone_dirs; do
                 if [[ -d "$src_claude_dir/$d" ]]; then
                     rm -rf "$env_dir/.claude/$d"
