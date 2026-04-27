@@ -1,6 +1,6 @@
 {
   "name": "claude-cac",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "description": "Isolate, protect, and manage your Claude Code — versions, environments, identity, and proxy.",
   "bin": {
     "cac": "cac"
