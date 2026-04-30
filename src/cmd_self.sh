@@ -41,11 +41,13 @@ cmd_self() {
     case "${1:-help}" in
         update)          _self_cmd_update ;;
         delete|remove)   cmd_delete ;;
+        vpn-ensure)      _vpn_ensure_compatible "${2:-}" ;;
         help|-h|--help)
             echo "$(_bold "cac self") — cac self-management"
             echo
             echo "  $(_bold "update")    Update cac to the latest version"
             echo "  $(_bold "delete")    Uninstall cac completely"
+            echo "  $(_green "cac self vpn-ensure") <proxy>    Check VPN compatibility"
             ;;
         *) _die "unknown: cac self $1" ;;
     esac

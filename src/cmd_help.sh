@@ -24,6 +24,7 @@ cmd_help() {
     echo "  $(_bold "Self")"
     echo "    $(_green "cac self update")             Update cac"
     echo "    $(_green "cac self delete")             Uninstall cac completely"
+    echo "    $(_green "cac self vpn-ensure") <proxy>    Check VPN compatibility"
     echo
 
     echo "  $(_bold "Docker")"
